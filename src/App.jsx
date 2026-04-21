@@ -1,175 +1,199 @@
-import { useState, useEffect } from 'react';
-import { auth, db } from './lib/cloudbase';
+import React, { useState, useEffect } from 'react';
 
-const generateUniqueId = () =>
-  'UID-' + Math.random().toString(36).substring(2, 8).toUpperCase();
+// 导入所有页面组件
+import HomePage from './components/pages/HomePage';
+import AuthPage from './components/pages/AuthPage';
+import DashboardPage from './components/pages/DashboardPage';
+import DistillingPage from './components/pages/DistillingPage';
+import ChatPage from './components/pages/ChatPage';
+import ErrorPage from './components/pages/ErrorPage';
 
-export function useAuth(setAppPhase, showMsg) {
-  const [authMethod, setAuthMethod] = useState('email');
-  const [isLoginMode, setIsLoginMode] = useState(false);
-  const [nickname, setNickname] = useState('');
-  const [account, setAccount] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [verificationCode, setVerificationCode] = useState('');
-  const [countdown, setCountdown] = useState(0);
-  const [authError, setAuthError] = useState('');
-  const [isAuthenticating, setIsAuthenticating] = useState(false);
-  const [isAgreed, setIsAgreed] = useState(false);
-  const [user, setUser] = useState(null);
-  const [userProfile, setUserProfile] = useState(null);
+// 导入全局组件与钩子
+import ToastMessage from './components/ui/ToastMessage';
+import { useAuth } from './hooks/useAuth';
+import { useToast } from './hooks/useToast';
 
+// 导入核心引擎
+import { db, sdkInitError } from './lib/cloudbase';
+import { callDoubaoAPI } from './lib/api';
+
+export default function App() {
+  // === 全局路由与状态调度 ===
+  const [appPhase, setAppPhase] = useState('home'); // 可选值: home, auth, dashboard, distilling, chat
+  const [showAgreementModal, setShowAgreementModal] = useState(false);
+  
+  // === 核心数据状态 ===
+  const [savedPersonas, setSavedPersonas] = useState([]);
+  const [uploadedFiles, setUploadedFiles] = useState([]);
+  const [activePersona, setActivePersona] = useState('');
+  const [messages, setMessages] = useState([]);
+  
+  // === 蒸馏页面专用状态 ===
+  const [distillProgress, setDistillProgress] = useState(0);
+  const [distillLogs, setDistillLogs] = useState([]);
+
+  // === 挂载自定义 Hooks ===
+  const { sysMessage, showMsg, clearMsg } = useToast();
+  const authProps = useAuth(setAppPhase, showMsg);
+
+  // === 数据库操作：获取已保存的人格列表 ===
+  const fetchSavedPersonas = async () => {
+    if (!db || !authProps.user?.uid) return;
+    try {
+      const res = await db.collection('personas').where({ uid: String(authProps.user.uid) }).get();
+      // 适配 TCB V2 数据库返回格式，确保获取 _id 作为唯一标识
+      setSavedPersonas(res.data.map(item => ({ ...item, id: item._id || item.id })));
+    } catch (err) {
+      console.error('获取人格列表失败:', err);
+    }
+  };
+
+  // 监听用户登录状态，登录成功后自动拉取列表
   useEffect(() => {
-    let timer;
-    if (countdown > 0) timer = setInterval(() => setCountdown(p => p - 1), 1000);
-    return () => clearInterval(timer);
-  }, [countdown]);
-
-  useEffect(() => {
-    if (!auth || !db) return;
-
-    const loadUserProfile = async (uid, email, isAnon) => {
-      try {
-        const res = await db.collection('users').where({ uid: String(uid) }).get();
-        if (res.data && res.data.length > 0) {
-          setUserProfile(res.data[0]);
-        } else {
-          const savedNickname = localStorage.getItem('temp_nickname') || (email ? email.split('@')[0] : '云端新用户');
-          const newProfile = {
-            uid: String(uid),
-            email: email || 'anonymous@demo.com',
-            nickname: isAnon ? '匿名访客' : savedNickname,
-            shortId: generateUniqueId(),
-            createdAt: Date.now()
-          };
-          await db.collection('users').add(newProfile);
-          setUserProfile(newProfile);
-          localStorage.removeItem('temp_nickname');
-        }
-      } catch (err) {
-        showMsg(`⛔ 数据库档案加载失败！\n${err.message || err.code}`);
-      }
-    };
-
-    const handleLoginState = async (loginState) => {
-      if (loginState) {
-        const loginType = loginState.loginType || loginState.authType || '';
-        const isAnon = loginType === 'ANONYMOUS' || loginType === 'anonymous' || (!loginState.user?.email && !loginState.user?.phoneNumber);
-        const uid = loginState.user?.uid || loginState.uid || 'anonymous_uid';
-        const userEmail = loginState.user?.email || loginState.user?.phoneNumber || '';
-        setUser({ uid, isAnonymous: isAnon, email: userEmail });
-        await loadUserProfile(uid, userEmail, isAnon);
-      } else {
-        setUser(null);
-        setUserProfile(null);
-      }
-    };
-
-    auth.getLoginState().then(handleLoginState);
-    const unsubscribe = auth.onLoginStateChanged(handleLoginState);
-    return () => { if (typeof unsubscribe === 'function') unsubscribe(); };
-  }, []); 
-
-  const handleSendCode = async () => {
-    if (!account) { setAuthError(`请先填写${authMethod === 'email' ? '邮箱' : '手机号'}`); return; }
-    setAuthError('');
-    try {
-      // 🚀 核心修复：使用 TCB V2 的正确 API 发送验证码
-      if (authMethod === 'email') {
-        await auth.getVerification({ email: account });
-      } else {
-        await auth.getVerification({ phone_number: account });
-      }
-      setCountdown(60);
-      showMsg(`✅ 验证码已发送至：${account} (请注意检查垃圾箱)`);
-    } catch (err) {
-      setAuthError("发送失败: " + (err.message || err.code));
+    if (authProps.user) {
+      fetchSavedPersonas();
     }
+  }, [authProps.user]);
+
+  // 如果云开发初始化失败，直接拦截到白屏急救页
+  if (sdkInitError) {
+    return <ErrorPage error={sdkInitError} />;
+  }
+
+  // === 核心业务方法 ===
+
+  // 1. 同意协议并前往登录注册
+  const handleAgreeAndProceed = () => {
+    setShowAgreementModal(false);
+    setAppPhase('auth');
   };
 
-  const handleAuthSubmit = async (e) => {
-    e.preventDefault();
-    setAuthError('');
-    setIsAuthenticating(true);
+  // 2. 开始启动 AI 多模态人格蒸馏
+  const handleStartDistillation = async () => {
+    if (uploadedFiles.length === 0) return;
+    setAppPhase('distilling');
+    setDistillProgress(10);
+    setDistillLogs(['[初始化] 启动数字资产多模态编译器...']);
+
     try {
-      if (!isLoginMode) {
-        if (!nickname.trim()) throw new Error("请填写用户名");
-        if (!account.trim()) throw new Error("请填写账号");
-        if (password.length < 6) throw new Error("密码至少 6 位");
-        if (password !== confirmPassword) throw new Error("两次密码不一致！");
-        if (!verificationCode.trim()) throw new Error("请输入验证码");
-        localStorage.setItem('temp_nickname', nickname.trim());
-        
-        // 🚀 核心修复：使用 TCB V2 正确的新版注册 API
-        if (authMethod === 'email') {
-          await auth.signUp({ email: account, password: password, code: verificationCode });
-        } else {
-          await auth.signUp({ phone_number: account, password: password, code: verificationCode });
-        }
-        
-        // 注册成功后自动静默登录
-        try { await auth.signInWithEmailAndPassword(account, password); } catch (e) {}
-        
-        showMsg("🎉 账号创建成功！专属 UID 已分配。");
+      const imageParts = uploadedFiles.filter(f => f.isImage);
+      const textParts = uploadedFiles.filter(f => f.isText).map(f => f.textContent).join('\n');
+
+      setDistillProgress(40);
+      setDistillLogs(prev => [...prev, '[连接中] 正在将素材上行至大模型云端节点进行特征提取...']);
+
+      let prompt = `请根据以下素材，深入提炼该人物的性格特征、语言风格、说话逻辑，最后给我一个严格的人格设定 prompt。必须要求后续你的回复中包含带有 <del>想删掉的话</del> 标签的内容以模拟人类打字犹豫感。`;
+      if (textParts) prompt += `\n\n文本素材:\n${textParts}`;
+
+      const responseText = await callDoubaoAPI(prompt, "你是一个专业的人格蒸馏AI核心，请分析传入的数据。", imageParts);
+
+      setDistillProgress(80);
+      setDistillLogs(prev => [...prev, '[成功] 模型提炼完毕，已生成核心灵魂设定。']);
+      setDistillLogs(prev => [...prev, '[刻录] 正在将数字生命档案刻录至数据库...']);
+
+      const newPersona = {
+        uid: authProps.user?.uid || 'anonymous',
+        name: `人格副本_${new Date().toLocaleDateString().replace(/\//g, '')}`,
+        content: responseText,
+        createdAt: Date.now()
+      };
+
+      if (db) {
+        await db.collection('personas').add(newPersona);
+      }
+
+      setDistillProgress(100);
+      setDistillLogs(prev => [...prev, '[完成] 资产刻录成功！即将唤醒工作台...']);
+
+      // 延迟跳转，让用户看清完成状态
+      setTimeout(() => {
+        setUploadedFiles([]);
+        fetchSavedPersonas();
         setAppPhase('dashboard');
-      } else {
-        if (!account.trim() || !password.trim()) throw new Error("请输入账号和密码");
-        await auth.signInWithEmailAndPassword(account, password);
-        setAppPhase('dashboard');
-      }
-    } catch (err) {
-      const rawMsg = err.message || err.code || String(err);
-      const msg = rawMsg.toLowerCase();
-      let errorMsg;
-      if (msg.includes('用户名') || msg.includes('两次') || msg.includes('验证码')) errorMsg = err.message;
-      else if (msg.includes('password') || msg.includes('密码')) errorMsg = '密码错误或不符合规范';
-      else if (msg.includes('exist') || msg.includes('not found')) errorMsg = '账号未注册，请切换注册模式';
-      else if (msg.includes('already')) errorMsg = '该账号已注册，请直接登录';
-      else if (msg.includes('verify') || msg.includes('code')) errorMsg = '验证码错误或已失效';
-      else errorMsg = "系统提示: " + rawMsg;
-      setAuthError(errorMsg);
-    } finally {
-      setIsAuthenticating(false);
+      }, 2000);
+
+    } catch (error) {
+      setDistillLogs(prev => [...prev, `[异常终止] 蒸馏失败: ${error.message}`]);
+      setTimeout(() => setAppPhase('dashboard'), 3500);
     }
   };
 
-  const handleGuestAuth = async () => {
-    setAuthError('');
-    setIsAuthenticating(true);
+  // 3. 将档案载入聊天引擎
+  const loadPersonaAndChat = (persona) => {
+    setActivePersona(persona.content);
+    // 初始化系统指令气泡（隐藏气泡），由于这是加载页面，所以无需触发动画
+    setMessages([
+      { id: Date.now(), role: 'system', text: persona.content, time: new Date().toLocaleTimeString(), isAnimated: false }
+    ]);
+    setAppPhase('chat');
+  };
+
+  // 4. 销毁数字资产
+  const handleDeleteSavedPersona = async (e, id) => {
+    e.stopPropagation();
     try {
-      await auth.anonymousAuthProvider().signIn();
-      setAppPhase('dashboard');
-    } catch (err) {
-      setAuthError(`游客登录失败: ${err.message || err.code}`);
-    } finally {
-      setIsAuthenticating(false);
+      await db.collection('personas').doc(id).remove();
+      setSavedPersonas(prev => prev.filter(p => p.id !== id));
+      showMsg("✅ 对应的数字分身档案已彻底销毁");
+    } catch (error) {
+      showMsg(`❌ 销毁失败: ${error.message}`);
     }
   };
 
-  const handleLogout = async () => {
-    if (auth) await auth.signOut();
-    setAppPhase('home');
-    setNickname(''); setAccount(''); setPassword('');
-    setConfirmPassword(''); setVerificationCode('');
-    setIsLoginMode(false); setAuthError('');
-  };
+  return (
+    <>
+      {/* 根节点动态渲染调度中心 */}
+      {appPhase === 'home' && (
+        <HomePage
+          setAppPhase={setAppPhase}
+          showMsg={showMsg}
+          isAgreed={authProps.isAgreed}
+          setIsAgreed={authProps.setIsAgreed}
+          showAgreementModal={showAgreementModal}
+          setShowAgreementModal={setShowAgreementModal}
+          handleAgreeAndProceed={handleAgreeAndProceed}
+        />
+      )}
 
-  return {
-    authMethod, setAuthMethod,
-    isLoginMode, setIsLoginMode,
-    nickname, setNickname,
-    account, setAccount,
-    password, setPassword,
-    confirmPassword, setConfirmPassword,
-    verificationCode, setVerificationCode,
-    countdown,
-    authError, setAuthError,
-    isAuthenticating,
-    isAgreed, setIsAgreed,
-    user, userProfile,
-    handleSendCode,
-    handleAuthSubmit,
-    handleGuestAuth,
-    handleLogout,
-  };
+      {appPhase === 'auth' && (
+        <AuthPage 
+          setAppPhase={setAppPhase} 
+          authProps={authProps} 
+        />
+      )}
+
+      {appPhase === 'dashboard' && (
+        <DashboardPage
+          userProfile={authProps.userProfile}
+          savedPersonas={savedPersonas}
+          uploadedFiles={uploadedFiles}
+          setUploadedFiles={setUploadedFiles}
+          handleStartDistillation={handleStartDistillation}
+          handleDeleteSavedPersona={handleDeleteSavedPersona}
+          loadPersonaAndChat={loadPersonaAndChat}
+          handleLogout={authProps.handleLogout}
+        />
+      )}
+
+      {appPhase === 'distilling' && (
+        <DistillingPage 
+          distillProgress={distillProgress} 
+          distillLogs={distillLogs} 
+        />
+      )}
+
+      {appPhase === 'chat' && (
+        <ChatPage
+          setAppPhase={setAppPhase}
+          messages={messages}
+          setMessages={setMessages}
+          activePersona={activePersona}
+          showMsg={showMsg}
+        />
+      )}
+
+      {/* 全局消息提示 */}
+      <ToastMessage message={sysMessage} onClose={clearMsg} />
+    </>
+  );
 }
