@@ -86,10 +86,13 @@ export function useAuth(setAppPhase, showMsg) {
         showMsg("🎉 注册成功！");
         setAppPhase('dashboard');
       } else {
-        await auth.signIn({
-          [authMethod === 'email' ? 'email' : 'phone_number']: formattedAccount,
-          password
-        });
+        // 🚀 核心修复：TCB V2 的标准账号密码登录语法，不能用泛型 signIn
+        if (authMethod === 'email') {
+          await auth.signInWithEmailAndPassword(formattedAccount, password);
+        } else {
+          // 如果以后开放手机号登录，对应语法如下
+          await auth.signInWithPhoneAndPassword(formattedAccount, password);
+        }
         setAppPhase('dashboard');
       }
     } catch (err) { 
