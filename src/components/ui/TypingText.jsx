@@ -32,7 +32,10 @@ export default function TypingText({ content, persona, onComplete, scrollRef }) 
       if (index >= actions.length) {
         setIsTyping(false);
         if (onCompleteRef.current) onCompleteRef.current();
-        if (window.__typingResolve) { window.__typingResolve(); window.__typingResolve = null; }
+        if (window.__typingResolve) { 
+          window.__typingResolve(); 
+          window.__typingResolve = null; 
+        }
         return;
       }
       const action = actions[index];
@@ -53,9 +56,11 @@ export default function TypingText({ content, persona, onComplete, scrollRef }) 
       setTimeout(runAction, delay);
     };
     runAction();
+    
     return () => {
       isMounted = false;
-      if (window.__typingResolve) { window.__typingResolve(); window.__typingResolve = null; }
+      // 🚀 核心修复：绝对不能在这里调用 __typingResolve()！
+      // 否则在 React 严格模式下，双重挂载会导致锁被提前解开，从而多条消息同时打字。
     };
   }, [content, persona, scrollRef]);
 
