@@ -100,6 +100,9 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
       </header>
       <main className="flex-1 overflow-y-auto p-8 space-y-6">
         {messages.map(m => {
+          // 🚀 核心修复：遇到系统设定的 prompt，直接不渲染它，防止出现空泡泡
+          if (m.role === 'system') return null;
+
           const strippedText = m.text.replace(/<del>.*?<\/del>/g, '').trim();
           return (
             <div key={m.id} className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
