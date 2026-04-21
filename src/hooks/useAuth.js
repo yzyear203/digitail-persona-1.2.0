@@ -52,8 +52,17 @@ export function useAuth(setAppPhase, showMsg) {
       setVerificationId(res.verification_id); // 【核心修复】保存 ID
       setCountdown(60);
       showMsg("✅ 验证码已发送");
-    } catch (err) { setAuthError("发送失败: " + err.message); }
-  };
+    } catch (err) { 
+      // 在控制台打印完整的原始错误对象，方便排查
+      console.error("【TCB 完整报错日志】:", err);
+      
+      // 兼容 TCB SDK 各种奇葩的错误返回格式 (message / msg / code / 纯字符串 / 对象序列化)
+      const errorDetail = err.message || err.msg || err.code || (typeof err === 'string' ? err : JSON.stringify(err));
+      
+      setAuthError("操作失败: " + errorDetail);
+    } finally { 
+      setIsAuthenticating(false); 
+    }
 
   const handleAuthSubmit = async (e) => {
     e.preventDefault();
