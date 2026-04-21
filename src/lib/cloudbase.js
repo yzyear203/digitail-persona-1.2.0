@@ -1,3 +1,4 @@
+// src/lib/cloudbase.js
 import cloudbase from '@cloudbase/js-sdk';
 
 let tcb = null;
@@ -6,7 +7,6 @@ let db = null;
 let sdkInitError = null;
 
 try {
-  // 这里必须和你 Vercel 上填写的变量名完全对齐
   const envId = import.meta.env.VITE_CLOUDBASE_ENV_ID;
   const region = import.meta.env.VITE_CLOUDBASE_REGION;
   const accessKey = import.meta.env.VITE_CLOUDBASE_ACCESS_KEY;
@@ -15,13 +15,13 @@ try {
     throw new Error("致命异常：未检测到有效的 VITE_CLOUDBASE_ENV_ID 环境变量！");
   }
 
-  // 初始化配置
+  // 🚀 核心修复：在这里设置全局 timeout，强迫前端 SDK 等待 60 秒！
   const config = {
     env: envId,
-    region: region || 'ap-shanghai' // 既然确认了是上海，这里强制对齐
+    region: region || 'ap-shanghai',
+    timeout: 60000 
   };
 
-  // 如果有令牌则带上令牌
   if (accessKey) {
     config.accessKey = accessKey;
   }
