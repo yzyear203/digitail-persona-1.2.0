@@ -114,6 +114,7 @@ export default function App() {
 
     } catch (error) {
       setDistillLogs(prev => [...prev, `[异常终止] 蒸馏失败: ${error.message}`]);
+      showMsg(`❌ 蒸馏失败，大模型连接异常: ${error.message}`);
       setTimeout(() => setAppPhase('dashboard'), 3500);
     }
   };
