@@ -6,32 +6,30 @@ let db = null;
 let sdkInitError = null;
 
 try {
-  // 读取你刚刚在 Vercel 配置的官方环境变量
+  // 这里必须和你 Vercel 上填写的变量名完全对齐
   const envId = import.meta.env.VITE_CLOUDBASE_ENV_ID;
-  const region = import.meta.env.VITE_CLOUDBASE_REGION || 'ap-shanghai';
+  const region = import.meta.env.VITE_CLOUDBASE_REGION;
   const accessKey = import.meta.env.VITE_CLOUDBASE_ACCESS_KEY;
 
   if (!envId) {
     throw new Error("致命异常：未检测到有效的 VITE_CLOUDBASE_ENV_ID 环境变量！");
   }
 
-  // 使用官方推荐的完整配置进行初始化
-  const initConfig = {
+  // 初始化配置
+  const config = {
     env: envId,
-    region: region
+    region: region || 'ap-shanghai' // 既然确认了是上海，这里强制对齐
   };
-  
-  // 注入公开访问令牌，突破权限限制
+
+  // 如果有令牌则带上令牌
   if (accessKey) {
-    initConfig.accessKey = accessKey;
+    config.accessKey = accessKey;
   }
 
-  tcb = cloudbase.init(initConfig);
-  
-  // 挂载核心引擎
+  tcb = cloudbase.init(config);
   auth = tcb.auth({ persistence: 'local' });
   db = tcb.database();
-  
+
 } catch (err) {
   console.error("底层初始化失败:", err);
   sdkInitError = err.message;
