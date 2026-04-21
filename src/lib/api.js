@@ -1,28 +1,9 @@
-const fetchWithRetry = async (apiMessages, retries = 3, delay = 1000) => {
-  for (let i = 0; i < retries; i++) {
-    try {
-      const response = await fetch('/api/generate', {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: apiMessages })
-      });
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(`HTTP ${response.status} - ${errData.error || '后端接口错误'}`);
-      }
-      return await response.json();
-    } catch (e) {
-      if (i === retries - 1) throw e;
-      await new Promise(res => setTimeout(res, delay * Math.pow(2, i)));
-    }
-  }
-};
+import { cloudbase } from './cloudbase'; // 注意：确保 cloudbase.js 里导出了 tcb as cloudbase
 
 export const callDoubaoAPI = async (promptText, systemInstructionText = null, imageParts = []) => {
   const apiMessages = [];
-  if (systemInstructionText) {
-    apiMessages.push({ role: "system", content: systemInstructionText });
-  }
+  if (systemInstructionText) apiMessages.push({ role: "system", content: systemInstructionText });
+  
   if (imageParts.length > 0) {
     const userContent = [{ type: "text", text: promptText }];
     imageParts.forEach(img =>
@@ -32,6 +13,17 @@ export const callDoubaoAPI = async (promptText, systemInstructionText = null, im
   } else {
     apiMessages.push({ role: "user", content: promptText });
   }
-  const data = await fetchWithRetry(apiMessages);
-  return data.choices?.[0]?.message?.content || "";
+
+  try {
+    // 【核心修复】：不再用 fetch，直接呼叫你刚刚建好的名为 'generate' 的云函数
+    const res = await cloudbase.callFunction({
+      name: 'generate',
+      data: { messages: apiMessages }
+    });
+    
+    const data = res.result;
+    return data.choices?.[0]?.message?.content || "";
+  } catch (e) {
+    throw new Error(`AI 唤醒失败: ${e.message}`);
+  }
 };
