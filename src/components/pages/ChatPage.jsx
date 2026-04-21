@@ -33,23 +33,24 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
         `你是一个数字备份人格。请严格遵循设定：\n${activePersona}\n输出中必须包含 <del>想删掉的话</del>！多条消息请用 "|||" 隔开。`
       );
       if (currentInteractionRef.current !== interactionId) return;
+      
+      // 🚀 核心修复：废除会导致穿帮的合并逻辑。每一段文字都是独立的气泡。
       const replyParts = responseText.split('|||').map(s => s.trim()).filter(s => s);
-      const mergedParts = [];
-      let tempPart = "";
-      for (let part of replyParts) {
-        if (part.replace(/<del>.*?<\/del>/g, '').trim() === "" && part.includes('<del>')) {
-          tempPart += part + " ";
-        } else {
-          mergedParts.push(tempPart + part);
-          tempPart = "";
-        }
-      }
-      if (tempPart) mergedParts.push(tempPart.trim());
+      
       setIsTypingIndicator(false);
-      for (let i = 0; i < mergedParts.length; i++) {
+      
+      for (let i = 0; i < replyParts.length; i++) {
         if (currentInteractionRef.current !== interactionId) break;
-        setMessages(prev => [...prev, { id: Date.now() + i, role: 'assistant', text: mergedParts[i], time: new Date().toLocaleTimeString(), isAnimated: true }]);
-        if (i < mergedParts.length - 1) {
+        
+        setMessages(prev => [...prev, { 
+          id: Date.now() + i, 
+          role: 'assistant', 
+          text: replyParts[i], 
+          time: new Date().toLocaleTimeString(), 
+          isAnimated: true 
+        }]);
+        
+        if (i < replyParts.length - 1) {
           await new Promise(resolve => { window.__typingResolve = resolve; });
           await new Promise(r => setTimeout(r, 600));
         }
@@ -98,16 +99,19 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
         </div>
       </header>
       <main className="flex-1 overflow-y-auto p-8 space-y-6">
-        {messages.map(m => (
-          <div key={m.id} className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
-            <div className={`max-w-[75%] px-6 py-4 rounded-3xl shadow-sm text-sm font-medium leading-relaxed ${m.role === 'user' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white text-slate-800 border border-slate-200 rounded-bl-none'}`}>
-              {m.role === 'assistant' && m.isAnimated
-                ? <TypingText content={m.text} persona={activePersona} scrollRef={messagesEndRef} onComplete={() => setMessages(p => p.map(msg => msg.id === m.id ? { ...msg, isAnimated: false } : msg))} />
-                : m.text.replace(/<del>.*?<\/del>/g, '')}
-              <span className={`block text-[10px] mt-2 font-black opacity-50 ${m.role === 'user' ? 'text-indigo-100' : 'text-slate-400'}`}>{m.time}</span>
+        {messages.map(m => {
+          const strippedText = m.text.replace(/<del>.*?<\/del>/g, '').trim();
+          return (
+            <div key={m.id} className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
+              <div className={`max-w-[75%] px-6 py-4 rounded-3xl shadow-sm text-[15px] font-medium leading-relaxed ${m.role === 'user' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white text-slate-800 border border-slate-200 rounded-bl-none'}`}>
+                {m.role === 'assistant' && m.isAnimated
+                  ? <TypingText content={m.text} persona={activePersona} scrollRef={messagesEndRef} onComplete={() => setMessages(p => p.map(msg => msg.id === m.id ? { ...msg, isAnimated: false } : msg))} />
+                  : (strippedText ? strippedText : <span className="italic text-slate-400 text-sm">（撤回了一条消息）</span>)}
+                <span className={`block text-[10px] mt-2 font-black opacity-50 ${m.role === 'user' ? 'text-indigo-100' : 'text-slate-400'}`}>{m.time}</span>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
         {isTypingIndicator && (
           <div className="flex gap-2 p-4 bg-white rounded-2xl w-fit">
             <div className="w-2 h-2 bg-slate-300 rounded-full animate-bounce"></div>
