@@ -1,4 +1,5 @@
-import { cloudbase } from './cloudbase'; // 注意：确保 cloudbase.js 里导出了 tcb as cloudbase
+// src/lib/api.js
+import { cloudbase } from './cloudbase';
 
 export const callDoubaoAPI = async (promptText, systemInstructionText = null, imageParts = []) => {
   const apiMessages = [];
@@ -15,15 +16,16 @@ export const callDoubaoAPI = async (promptText, systemInstructionText = null, im
   }
 
   try {
-    // 【核心修复】：不再用 fetch，直接呼叫你刚刚建好的名为 'generate' 的云函数
     const res = await cloudbase.callFunction({
       name: 'generate',
-      data: { messages: apiMessages }
+      data: { messages: apiMessages },
+      // 🚀 核心修复：TCB 默认超时极短，强行将前端等待时间延长至 60 秒！
+      timeout: 60000
     });
     
     const data = res.result;
     return data.choices?.[0]?.message?.content || "";
   } catch (e) {
-    throw new Error(`AI 唤醒失败: ${e.message}`);
+    throw new Error(`网络或超时异常: ${e.message}`);
   }
 };
