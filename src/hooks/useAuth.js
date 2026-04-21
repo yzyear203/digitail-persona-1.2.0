@@ -96,5 +96,21 @@ export function useAuth(setAppPhase, showMsg) {
 
   const handleLogout = async () => { await auth.signOut(); setAppPhase('home'); };
 
-  return { ... }; // 保持原有返回结构
+  return {
+    authMethod, setAuthMethod,
+    isLoginMode, setIsLoginMode,
+    nickname, setNickname,
+    account, setAccount,
+    password, setPassword,
+    confirmPassword, setConfirmPassword,
+    verificationCode, setVerificationCode,
+    verificationId, setVerificationId,
+    countdown, setCountdown,
+    authError, setAuthError,
+    isAuthenticating, setIsAuthenticating,
+    isAgreed, setIsAgreed,
+    user, setUser,
+    userProfile, setUserProfile,
+    handleSendCode, handleAuthSubmit, handleGuestAuth, handleLogout
+  };
 }
