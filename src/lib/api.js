@@ -19,13 +19,19 @@ export const callDoubaoAPI = async (promptText, systemInstructionText = null, im
     const res = await cloudbase.callFunction({
       name: 'generate',
       data: { messages: apiMessages },
-      // 🚀 核心修复：TCB 默认超时极短，强行将前端等待时间延长至 60 秒！
       timeout: 60000
     });
     
     const data = res.result;
+    
+    // 🚀 核心修复：如果火山引擎报错（比如 Key 填错了），立刻拦截并抛出真实原因
+    if (data && data.error) {
+      throw new Error(data.error.message || JSON.stringify(data.error));
+    }
+    
     return data.choices?.[0]?.message?.content || "";
   } catch (e) {
-    throw new Error(`网络或超时异常: ${e.message}`);
+    // 抛出干净的错误信息给界面
+    throw new Error(`${e.message}`);
   }
 };
