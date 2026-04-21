@@ -68,19 +68,19 @@ export function useAuth(setAppPhase, showMsg) {
     auth.getLoginState().then(handleLoginState);
     const unsubscribe = auth.onLoginStateChanged(handleLoginState);
     return () => { if (typeof unsubscribe === 'function') unsubscribe(); };
-  }, []); // 修复：去掉 account 依赖
+  }, []);
 
   const handleSendCode = async () => {
     if (!account) { setAuthError(`请先填写${authMethod === 'email' ? '邮箱' : '手机号'}`); return; }
     setAuthError('');
     try {
       if (authMethod === 'email') {
-        await auth.sendEmailCode(account);
+        await auth.getVerification({ email: account });
       } else {
-        await auth.sendPhoneCode(account);
+        await auth.getVerification({ phone_number: account });
       }
       setCountdown(60);
-      showMsg(`✅ 验证码已发送至：${account}`);
+      showMsg(`✅ 验证码已发送至：${account} (请检查垃圾箱)`);
     } catch (err) {
       setAuthError("发送失败: " + (err.message || err.code));
     }
@@ -97,15 +97,19 @@ export function useAuth(setAppPhase, showMsg) {
         if (password.length < 6) throw new Error("密码至少 6 位");
         if (password !== confirmPassword) throw new Error("两次密码不一致！");
         if (!verificationCode.trim()) throw new Error("请输入验证码");
+        
         localStorage.setItem('temp_nickname', nickname.trim());
+        
+        // 🚀 核心修复：更新为 TCB V2 标准且真实的接口
         if (authMethod === 'email') {
-          await auth.signUpWithEmailCode(account, password, verificationCode);
-          try { await auth.signInWithEmailAndPassword(account, password); } catch (e) {}
+          await auth.signUp({ email: account, password: password, code: verificationCode });
         } else {
-          await auth.signUpWithPhoneCode(account, password, verificationCode);
-          try { await auth.signInWithEmailAndPassword(account, password); } catch (e) {}
+          await auth.signUp({ phone_number: account, password: password, code: verificationCode });
         }
-        showMsg("🎉 账号创建成功！");
+        
+        try { await auth.signInWithEmailAndPassword(account, password); } catch (e) {}
+        
+        showMsg("🎉 账号创建成功！专属 UID 已分配。");
         setAppPhase('dashboard');
       } else {
         if (!account.trim() || !password.trim()) throw new Error("请输入账号和密码");
@@ -119,8 +123,9 @@ export function useAuth(setAppPhase, showMsg) {
       if (msg.includes('用户名') || msg.includes('两次') || msg.includes('验证码')) errorMsg = err.message;
       else if (msg.includes('password') || msg.includes('密码')) errorMsg = '密码错误或不符合规范';
       else if (msg.includes('exist') || msg.includes('not found')) errorMsg = '账号未注册，请切换注册模式';
-      else if (msg.includes('already')) errorMsg = '该账号已注册，请直接登录';
-      else if (msg.includes('verify') || msg.includes('code')) errorMsg = '验证码错误或已失效';
+      else if (msg.includes('already')) errorMsg = '该账号已被注册，请直接登录';
+      else if (msg.includes('unverified') || msg.includes('验证')) errorMsg = '账号验证失败！提示：如果您之前用此邮箱测试并卡住了，请换个新邮箱注册。';
+      else if (msg.includes('verify') || msg.includes('code') || msg.includes('无效')) errorMsg = '验证码错误或已失效';
       else errorMsg = "系统提示: " + rawMsg;
       setAuthError(errorMsg);
     } finally {
