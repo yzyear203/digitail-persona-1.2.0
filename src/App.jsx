@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { auth, db } from '../lib/cloudbase';
+import { auth, db } from './lib/cloudbase';
 
 const generateUniqueId = () =>
   'UID-' + Math.random().toString(36).substring(2, 8).toUpperCase();
