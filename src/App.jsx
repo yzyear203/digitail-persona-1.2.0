@@ -1,132 +1,175 @@
-import React, { useState, useEffect } from 'react';
-import { auth, db, sdkInitError } from './lib/cloudbase';
-import { callDoubaoAPI } from './lib/api';
-import { useToast } from './hooks/useToast';
-import { useAuth } from './hooks/useAuth';
-import ToastMessage from './components/ui/ToastMessage';
-import ErrorPage from './components/pages/ErrorPage';
-import HomePage from './components/pages/HomePage';
-import AuthPage from './components/pages/AuthPage';
-import DashboardPage from './components/pages/DashboardPage';
-import DistillingPage from './components/pages/DistillingPage';
-import ChatPage from './components/pages/ChatPage';
+import { useState, useEffect } from 'react';
+import { auth, db } from '../lib/cloudbase';
 
-export default function App() {
-  const [appPhase, setAppPhase] = useState('home');
-  const { sysMessage, showMsg, clearMsg } = useToast();
-  const authProps = useAuth(setAppPhase, showMsg);
-  const { user, userProfile, handleLogout, isAgreed, setIsAgreed } = authProps;
+const generateUniqueId = () =>
+  'UID-' + Math.random().toString(36).substring(2, 8).toUpperCase();
 
-  const [showAgreementModal, setShowAgreementModal] = useState(false);
-  const [savedPersonas, setSavedPersonas] = useState([]);
-  const [uploadedFiles, setUploadedFiles] = useState([]);
-  const [distillProgress, setDistillProgress] = useState(0);
-  const [distillLogs, setDistillLogs] = useState([]);
-  const [activePersona, setActivePersona] = useState("你是一个乐于助人的 AI 助手。");
-  const [messages, setMessages] = useState([]);
+export function useAuth(setAppPhase, showMsg) {
+  const [authMethod, setAuthMethod] = useState('email');
+  const [isLoginMode, setIsLoginMode] = useState(false);
+  const [nickname, setNickname] = useState('');
+  const [account, setAccount] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [verificationCode, setVerificationCode] = useState('');
+  const [countdown, setCountdown] = useState(0);
+  const [authError, setAuthError] = useState('');
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [isAgreed, setIsAgreed] = useState(false);
+  const [user, setUser] = useState(null);
+  const [userProfile, setUserProfile] = useState(null);
 
   useEffect(() => {
-    if (!auth || !db || !user) return;
-    const watcher = db.collection('personas').where({ owner: String(user.uid) }).watch({
-      onChange: snapshot => {
-        const loaded = snapshot.docs.map(doc => ({ id: doc._id, ...doc }));
-        loaded.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-        setSavedPersonas(loaded);
-      },
-      onError: err => console.error("personas 监听失败:", err)
-    });
-    return () => watcher.close();
-  }, [user]);
+    let timer;
+    if (countdown > 0) timer = setInterval(() => setCountdown(p => p - 1), 1000);
+    return () => clearInterval(timer);
+  }, [countdown]);
 
-  const handleAgreeAndProceed = () => {
-    setShowAgreementModal(false);
-    setAppPhase(user && !user.isAnonymous ? 'dashboard' : 'auth');
-  };
+  useEffect(() => {
+    if (!auth || !db) return;
 
-  const loadPersonaAndChat = (persona) => {
-    setActivePersona(persona.personaPrompt);
-    setMessages([
-      { id: 1, role: 'system', text: `已从云端唤醒【${persona.name}】。`, time: new Date().toLocaleTimeString(), isAnimated: false },
-      { id: 2, role: 'assistant', text: `你好，我是 ${persona.name} 的数字分身，继续聊吧。`, time: new Date().toLocaleTimeString(), isAnimated: true }
-    ]);
-    setAppPhase('chat');
-  };
-
-  const handleDeleteSavedPersona = async (e, personaId) => {
-    e.stopPropagation();
-    if (!user) return;
-    try {
-      await db.collection('personas').doc(personaId).remove();
-      showMsg("✅ 分身档案已删除");
-    } catch (err) {
-      showMsg(`❌ 删除失败：${err.message}`);
-    }
-  };
-
-  const handleStartDistillation = async () => {
-    setAppPhase('distilling');
-    setDistillLogs(["[系统就绪] 开始建立后端真实算力连接..."]);
-    setDistillProgress(5);
-    try {
-      const imageParts = uploadedFiles.filter(f => f.isImage && f.base64Data).map(f => ({ mimeType: f.mimeType, base64Data: f.base64Data }));
-      const textContents = uploadedFiles.filter(f => f.isText && f.textContent).map(f => `【${f.name}】:\n${f.textContent}`).join('\n\n');
-      setDistillLogs(prev => [...prev, `[解析层] 加载 ${imageParts.length} 张图片，${textContents ? '含文本数据' : '无文本'}。`]);
-      setDistillProgress(25);
-      setTimeout(() => { setDistillLogs(prev => [...prev, "[深度推理] 注入视觉大模型，执行 OCR 提炼..."]); setDistillProgress(50); }, 1000);
-
-      let prompt = `用户上传了包含真实聊天记录的图片/截图。请提炼这个人的数字人格设定，用第一人称回答，必须包含：
-1. 核心性格与沟通风格。
-2. 常用口头禅（摘抄原话）。
-3. 处理事务的逻辑。
-4. 发消息的节奏风格。
-5. 连发条数心理边界（明确写出数字范围）。`;
-      if (textContents) prompt = `参考文本：\n\n${textContents}\n\n` + prompt;
-      if (!imageParts.length && !textContents) prompt = "用户未上传有效素材，请随机生成一个标准AI助手人格设定。";
-
-      const generatedPersona = await callDoubaoAPI(prompt, "你是一个擅长提炼人类心理学和行为特征的架构师。", imageParts);
-      setDistillLogs(prev => [...prev, "[算力释放] 特征映射完成！"]);
-      setDistillProgress(80);
-      setActivePersona(generatedPersona);
-
-      if (user && db) {
-        try {
-          await db.collection('personas').add({
-            name: uploadedFiles[0]?.name?.split('.')[0] || '未命名数字人',
-            personaPrompt: generatedPersona,
-            createdAt: Date.now(),
-            owner: String(user.uid)
-          });
-          setDistillLogs(prev => [...prev, "[云端同步] 档案已永久刻录至腾讯云。"]);
-        } catch (err) {
-          setDistillLogs(prev => [...prev, "[⚠️] 数据库存储失败，请检查配置"]);
+    const loadUserProfile = async (uid, email, isAnon) => {
+      try {
+        const res = await db.collection('users').where({ uid: String(uid) }).get();
+        if (res.data && res.data.length > 0) {
+          setUserProfile(res.data[0]);
+        } else {
+          const savedNickname = localStorage.getItem('temp_nickname') || (email ? email.split('@')[0] : '云端新用户');
+          const newProfile = {
+            uid: String(uid),
+            email: email || 'anonymous@demo.com',
+            nickname: isAnon ? '匿名访客' : savedNickname,
+            shortId: generateUniqueId(),
+            createdAt: Date.now()
+          };
+          await db.collection('users').add(newProfile);
+          setUserProfile(newProfile);
+          localStorage.removeItem('temp_nickname');
         }
+      } catch (err) {
+        showMsg(`⛔ 数据库档案加载失败！\n${err.message || err.code}`);
       }
-      setTimeout(() => {
-        setDistillLogs(prev => [...prev, "[编译成功] 正在挂载对话引擎..."]);
-        setDistillProgress(100);
-        setTimeout(() => {
-          setMessages([
-            { id: 1, role: 'system', text: '已通过认证，处于【自主人格】接管模式。', time: new Date().toLocaleTimeString(), isAnimated: false },
-            { id: 2, role: 'assistant', text: '你好呀！', time: new Date().toLocaleTimeString(), isAnimated: true }
-          ]);
-          setAppPhase('chat');
-        }, 1500);
-      }, 1000);
-    } catch (error) {
-      setDistillLogs(prev => [...prev, `[致命错误] 管线崩溃: ${error.message}`]);
+    };
+
+    const handleLoginState = async (loginState) => {
+      if (loginState) {
+        const loginType = loginState.loginType || loginState.authType || '';
+        const isAnon = loginType === 'ANONYMOUS' || loginType === 'anonymous' || (!loginState.user?.email && !loginState.user?.phoneNumber);
+        const uid = loginState.user?.uid || loginState.uid || 'anonymous_uid';
+        const userEmail = loginState.user?.email || loginState.user?.phoneNumber || '';
+        setUser({ uid, isAnonymous: isAnon, email: userEmail });
+        await loadUserProfile(uid, userEmail, isAnon);
+      } else {
+        setUser(null);
+        setUserProfile(null);
+      }
+    };
+
+    auth.getLoginState().then(handleLoginState);
+    const unsubscribe = auth.onLoginStateChanged(handleLoginState);
+    return () => { if (typeof unsubscribe === 'function') unsubscribe(); };
+  }, []); 
+
+  const handleSendCode = async () => {
+    if (!account) { setAuthError(`请先填写${authMethod === 'email' ? '邮箱' : '手机号'}`); return; }
+    setAuthError('');
+    try {
+      // 🚀 核心修复：使用 TCB V2 的正确 API 发送验证码
+      if (authMethod === 'email') {
+        await auth.getVerification({ email: account });
+      } else {
+        await auth.getVerification({ phone_number: account });
+      }
+      setCountdown(60);
+      showMsg(`✅ 验证码已发送至：${account} (请注意检查垃圾箱)`);
+    } catch (err) {
+      setAuthError("发送失败: " + (err.message || err.code));
     }
   };
 
-  if (sdkInitError) return <ErrorPage error={sdkInitError} />;
+  const handleAuthSubmit = async (e) => {
+    e.preventDefault();
+    setAuthError('');
+    setIsAuthenticating(true);
+    try {
+      if (!isLoginMode) {
+        if (!nickname.trim()) throw new Error("请填写用户名");
+        if (!account.trim()) throw new Error("请填写账号");
+        if (password.length < 6) throw new Error("密码至少 6 位");
+        if (password !== confirmPassword) throw new Error("两次密码不一致！");
+        if (!verificationCode.trim()) throw new Error("请输入验证码");
+        localStorage.setItem('temp_nickname', nickname.trim());
+        
+        // 🚀 核心修复：使用 TCB V2 正确的新版注册 API
+        if (authMethod === 'email') {
+          await auth.signUp({ email: account, password: password, code: verificationCode });
+        } else {
+          await auth.signUp({ phone_number: account, password: password, code: verificationCode });
+        }
+        
+        // 注册成功后自动静默登录
+        try { await auth.signInWithEmailAndPassword(account, password); } catch (e) {}
+        
+        showMsg("🎉 账号创建成功！专属 UID 已分配。");
+        setAppPhase('dashboard');
+      } else {
+        if (!account.trim() || !password.trim()) throw new Error("请输入账号和密码");
+        await auth.signInWithEmailAndPassword(account, password);
+        setAppPhase('dashboard');
+      }
+    } catch (err) {
+      const rawMsg = err.message || err.code || String(err);
+      const msg = rawMsg.toLowerCase();
+      let errorMsg;
+      if (msg.includes('用户名') || msg.includes('两次') || msg.includes('验证码')) errorMsg = err.message;
+      else if (msg.includes('password') || msg.includes('密码')) errorMsg = '密码错误或不符合规范';
+      else if (msg.includes('exist') || msg.includes('not found')) errorMsg = '账号未注册，请切换注册模式';
+      else if (msg.includes('already')) errorMsg = '该账号已注册，请直接登录';
+      else if (msg.includes('verify') || msg.includes('code')) errorMsg = '验证码错误或已失效';
+      else errorMsg = "系统提示: " + rawMsg;
+      setAuthError(errorMsg);
+    } finally {
+      setIsAuthenticating(false);
+    }
+  };
 
-  return (
-    <>
-      <ToastMessage message={sysMessage} onClose={clearMsg} />
-      {appPhase === 'home' && <HomePage setAppPhase={setAppPhase} showMsg={showMsg} isAgreed={isAgreed} setIsAgreed={setIsAgreed} showAgreementModal={showAgreementModal} setShowAgreementModal={setShowAgreementModal} handleAgreeAndProceed={handleAgreeAndProceed} />}
-      {appPhase === 'auth' && <AuthPage setAppPhase={setAppPhase} authProps={authProps} />}
-      {appPhase === 'dashboard' && <DashboardPage userProfile={userProfile} savedPersonas={savedPersonas} uploadedFiles={uploadedFiles} setUploadedFiles={setUploadedFiles} handleStartDistillation={handleStartDistillation} handleDeleteSavedPersona={handleDeleteSavedPersona} loadPersonaAndChat={loadPersonaAndChat} handleLogout={handleLogout} />}
-      {appPhase === 'distilling' && <DistillingPage distillProgress={distillProgress} distillLogs={distillLogs} />}
-      {appPhase === 'chat' && <ChatPage setAppPhase={setAppPhase} messages={messages} setMessages={setMessages} activePersona={activePersona} showMsg={showMsg} />}
-    </>
-  );
+  const handleGuestAuth = async () => {
+    setAuthError('');
+    setIsAuthenticating(true);
+    try {
+      await auth.anonymousAuthProvider().signIn();
+      setAppPhase('dashboard');
+    } catch (err) {
+      setAuthError(`游客登录失败: ${err.message || err.code}`);
+    } finally {
+      setIsAuthenticating(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    if (auth) await auth.signOut();
+    setAppPhase('home');
+    setNickname(''); setAccount(''); setPassword('');
+    setConfirmPassword(''); setVerificationCode('');
+    setIsLoginMode(false); setAuthError('');
+  };
+
+  return {
+    authMethod, setAuthMethod,
+    isLoginMode, setIsLoginMode,
+    nickname, setNickname,
+    account, setAccount,
+    password, setPassword,
+    confirmPassword, setConfirmPassword,
+    verificationCode, setVerificationCode,
+    countdown,
+    authError, setAuthError,
+    isAuthenticating,
+    isAgreed, setIsAgreed,
+    user, userProfile,
+    handleSendCode,
+    handleAuthSubmit,
+    handleGuestAuth,
+    handleLogout,
+  };
 }
