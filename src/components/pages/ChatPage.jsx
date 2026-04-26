@@ -85,13 +85,11 @@ ${activePersona}
     }
   };
 
-  const handleExtractTasks = async () => {
+const handleExtractTasks = async () => {
     setIsExtracting(true);
     try {
-      const chatHistory = messages.filter(m => m.role !== 'system').map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.replace(/<del>.*?<\/del>/g, '')}`).join('\n');const recentMessages = messages.filter(m => m.role !== 'system').slice(-12);
-const chatHistory = recentMessages.map(m => 
-  `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.replace(/<del>.*?<\/del>/g, '')}`
-).join('\n');
+      const chatHistory = messages.filter(m => m.role !== 'system').map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.replace(/<del>.*?<\/del>/g, '')}`).join('\n');
+      
       const jsonResponse = await callDoubaoAPI(`分析对话，提取所有代办事项，没有返回空数组。\n\n${chatHistory}`, '严格输出 JSON 字符串数组，例如：["联系张三", "发送邮件"]。');
       let tasks = [];
       try { tasks = JSON.parse(jsonResponse.replace(/```json|```/g, '').trim()); } catch (e) {}
