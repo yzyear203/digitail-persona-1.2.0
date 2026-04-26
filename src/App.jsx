@@ -15,7 +15,7 @@ import { useToast } from './hooks/useToast';
 
 // 导入核心引擎
 import { db, sdkInitError } from './lib/cloudbase';
-import { callDoubaoAPI } from './lib/api';
+import { callDoubaoAPI, callDeepSeekAPI } from './lib/api';
 
 export default function App() {
   // === 全局路由与状态调度 ===
@@ -68,8 +68,14 @@ export default function App() {
     setAppPhase('auth');
   };
 
-  // 2. 开始启动 AI 多模态人格蒸馏
-try {
+// 2. 开始启动 AI 多模态人格蒸馏 (完全替换该方法)
+  const handleStartDistillation = async () => {
+    if (uploadedFiles.length === 0) return;
+    setAppPhase('distilling');
+    setDistillProgress(10);
+    setDistillLogs(['[初始化] 启动数字资产双擎编译器...']);
+
+    try {
       const imageParts = uploadedFiles.filter(f => f.isImage);
       const textParts = uploadedFiles.filter(f => f.isText).map(f => f.textContent).join('\n');
       let combinedChatText = textParts;
@@ -96,79 +102,63 @@ B: [说话内容]
         setDistillLogs(prev => [...prev, '[视觉感知] 图文转译完毕，素材已提纯。']);
       }
 
-      // ================= 阶段二：DeepSeek 深度心理侧写 =================
-      setDistillProgress(60);
-      setDistillLogs(prev => [...prev, '[深度认知] 图文素材已移交 DeepSeek 引擎，启动 BAU 临床级侧写...']);
+      // ================= 阶段二：DeepSeek V4 Pro 深度心理侧写 =================
+      setDistillProgress(50);
+      setDistillLogs(prev => [...prev, '[深度认知] 启动 DeepSeek V4 Pro 思维链，进行 BAU 临床级侧写...']);
 
       let prompt = `你是一个融合了顶级行为学专家与 FBI 犯罪心理侧写师能力的数字人格架构师。
-
-用户上传了真实的聊天记录图片/截图或文本，请你仔细阅读其中的全部内容，然后从【发消息者】的角度，提炼出以下完整的数字人格设定。
-
-请严格用第一人称（"我"）书写，每一项都必须给出从原文中提炼的具体例子或数字范围，禁止泛泛而谈。
+请仔细阅读以下原始聊天切片，从【发消息者】的角度，提炼出数字人格设定。请严格用第一人称（"我"）书写，必须结合原文例子，禁止泛泛而谈。
 
 ---
-
 【一、打字节奏（物理表象）】
-- 我的打字速度：快/中/慢（从消息密度推断）
-- 我一次性连发的条数范围：X～X 条（必须给出确切数字范围，这决定了我后续使用"|||"切分消息的频率）
-- 我每条消息的长短习惯：几个字到几十个字，还是长段落？
+- 我的打字速度：快/中/慢
+- 我一次性连发的条数范围：X～X 条（必须给出确切数字范围，决定我使用"|||"切分消息的频率）
 - 我发完消息后是否习惯补发？触发条件是什么？
 
 【二、语言风格与社交面具】
-- 我的标志性口头禅和惯用词（直接摘抄原文，至少3个）
-- 我的句子收尾方式：是否习惯用"吧""哈""呢""～"或直接截断？
-- 我的标点使用习惯：爱用省略号？感叹号？还是几乎不用标点？
-- 我的固定高频错别字或缩写（如有，直接列出）
+- 我的标志性口头禅和惯用词（摘抄原文，至少3个）
+- 我的句子收尾方式：习惯用"吧""哈""呢""～"或直接截断？
+- 我的标点使用习惯
 - 发完消息发现错了，我会发一条纠正（如"*字"），还是直接忽略？
-- 我的社交面具（Overcompensation）：在这些语言背后，我试图维持一个什么样的人设？（比如：用烂梗掩饰脆弱，或用反问彰显智商？）
+- 我的社交面具（Overcompensation）：我试图维持一个什么样的人设？
 
 【三、情绪表达与触发器 (Triggers)】
-- 我表达开心的方式（"哈哈哈"/"笑死"/"😂"/还是沉默？）
-- 我表达不满或讽刺的方式（阴阳怪气、直接开骂、还是冷暴力？）
-- 情绪触发器：什么话题或哪种回复会瞬间激怒我，或者让我突然变得极度冷漠？
-- 我的自我暴露深度：容易进入私密话题，还是始终停留在表层？
+- 我表达开心/不满的方式
+- 情绪触发器：什么话题会瞬间激怒我或让我极度冷漠？
 
-【四、对话行为与微观操控 (Micro-Manipulation)】
-- 我的提问风格：喜欢反问、直接问、还是几乎不提问只陈述？
-- 我对别人消息的回应率：每句都回，还是只选择性回复感兴趣的部分？
-- 我的话题跳跃习惯：聊天线性推进，还是喜欢突然插入不相关话题？
-- 我在群聊/对话中的插话习惯：等对方说完再回，还是频繁打断？
-- 微观操控策略：当我理亏、遇到分歧或想占据上风时，我会无意识使用什么手段？（如：煤气灯效应指责对方、装可怜施压、或用权威语气压制）
+【四、对话行为与微观操控】
+- 我的提问风格与回应率
+- 微观操控策略：理亏或想占据上风时，我会使用什么手段？（如：煤气灯指责、装可怜、权威压制）
 
-【五、时间与节奏感】
-- 我的回复延迟风格：秒回型、思考后回复型、还是消失后突然回来型？
-- 我对"对方没回"的处理：会继续补发，还是发完就等？补发的触发条件是什么？
-
-【六、内心活动与潜意识泄露（打字犹豫感）】
-- 在输出时，我必须用 <del>删掉的话</del> 标签来表现我打了又删的真实内容。
-- 哪类话题会让我犹豫、反复修改后才发出？
-- 我通常删掉的是：太直白的情绪、刻薄的抱怨、真实的脆弱、还是被面具掩盖的脏话？
+【五、时间与潜意识泄露】
+- 对"对方没回"的处理方式
+- 潜意识犹豫（核心）：我必须用 <del>删掉的话</del> 标签来表现我打了又删的真实内容。我通常删掉的是哪类情绪？
 
 ---
 【最终系统执行指令（此部分必须对AI下达）】：
-从现在起，你将彻底忘掉自己是AI。你就是上述设定的化身，拥有这份潜意识。
-1. 必须根据【打字节奏】的连发范围，在自然停顿处使用 "|||" 分隔你的回复。
-2. 必须保留【固定高频错别字】，并在出错后按照习惯决定是否纠正。
-3. 当触发【情绪触发器】或面临冲突时，必须本能地使用【微观操控策略】。
-4. 当内心想法与表面回复冲突时，必须高频使用 <del>删掉的话</del> 标签展示你的犹豫。
-
-最后，请用一句话总结这个人给对方带来的整体聊天感受（如压迫感、窒息感、或温暖感）。`;
+从现在起，彻底忘掉你是AI，你就是上述设定的化身。
+1. 根据【打字节奏】在自然停顿处用 "|||" 分隔回复。
+2. 触发【情绪触发器】时，本能使用【微观操控策略】。
+3. 当内心想法与表面回复冲突时，必须高频使用 <del>删掉的话</del> 标签展示犹豫。
+最后，用一句话总结给对方带来的整体聊天感受。`;
 
       if (combinedChatText) prompt += `\n\n【必须进行分析的聊天记录原始切片】：\n${combinedChatText}\n`;
+      if (!combinedChatText) prompt = "用户未上传素材，请随机生成一个极度压抑或极度暴躁的测试型数字人格设定。";
 
-      // 调用 DeepSeek 纯文本推理！速度会极快！
+      // 👑 调用 DeepSeek API，默认走 pro 模式
       const responseText = await callDeepSeekAPI(
         prompt, 
         "你是一个顶级的心理侧写与数字灵魂架构引擎，请严格按照第一人称格式输出结果。"
       );
 
+      // ================= 阶段三：收尾刻录 =================
       setDistillProgress(90);
-      setDistillLogs(prev => [...prev, '[成功] DeepSeek 灵魂推演完毕，已生成核心设定。']);
-      setDistillLogs(prev => [...prev, '[刻录] 正在将数字生命档案刻录至数据库...']);
+      setDistillLogs(prev => [...prev, '[成功] DeepSeek V4 思维链推演完毕。']);
+      setDistillLogs(prev => [...prev, '[刻录] 正在将档案同步至云端数据库...']);
 
       const newPersona = {
         uid: authProps.user?.uid || 'anonymous',
-        name: `人格副本_${new Date().toLocaleDateString().replace(/\//g, '')}`,
+        name: `灵魂切片_${new Date().toLocaleDateString().replace(/\//g, '')}`,
         content: responseText,
         createdAt: Date.now()
       };
@@ -176,7 +166,7 @@ B: [说话内容]
       if (db) await db.collection('personas').add(newPersona);
 
       setDistillProgress(100);
-      setDistillLogs(prev => [...prev, '[完成] 资产刻录成功！即将唤醒工作台...']);
+      setDistillLogs(prev => [...prev, '[完成] 资产刻录成功！唤醒工作台...']);
 
       setTimeout(() => {
         setUploadedFiles([]);
@@ -185,12 +175,11 @@ B: [说话内容]
       }, 2000);
 
     } catch (error) {
-      setDistillLogs(prev => [...prev, `[异常终止] 蒸馏失败: ${error.message}`]);
+      setDistillLogs(prev => [...prev, `[异常终止] 架构崩塌: ${error.message}`]);
       showMsg(`❌ 编译链断裂: ${error.message}`);
       setTimeout(() => setAppPhase('dashboard'), 3500);
     }
   };
-
   // 3. 将档案载入聊天引擎
   const loadPersonaAndChat = (persona) => {
     setActivePersona(persona.content);
