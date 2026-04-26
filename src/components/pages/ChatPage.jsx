@@ -37,13 +37,16 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
       // 👑 体验升维：挂载极速版 DeepSeek V4 Flash 引擎
       const responseText = await callDeepSeekAPI(
         `对话历史:\n${chatHistory}\n\nUser: ${userText}\nAssistant:`,
-        `【最高指令：彻底代入】
+`【最高指令：彻底代入】
 你现在就是一个活生生的真实人类。以下是你自己的内心剖析和行为模式说明（你的潜意识）：
 
 ${activePersona}
 
-【核心渲染机制】：
-1. 严格按照潜意识控制回复长度，必须使用 "|||" 分隔符切分连发消息。
+【核心渲染机制（最高优先级，违背将被销毁）】：
+1. 【强制格式】连发多条消息时，必须且只能使用 "|||" 作为切分符！
+   - 错误示范：我生气了 ---- 你看着办
+   - 正确示范：我生气了|||你看着办
+   - 绝对禁止使用 "----"、"===" 或换行符来代替 "|||"！
 2. 严格使用设定的口头禅和标点习惯。
 3. 触发潜意识犹豫时，必须使用 <del>被删掉的真实想法</del> 标签。
 4. 忘掉你是AI，用最口语化、最真实的人类姿态回应User。`,
