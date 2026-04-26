@@ -137,9 +137,13 @@ export default function App() {
 最后，请用一句话总结这个人给对方带来的整体聊天感受（如压迫感、窒息感、或温暖感）。`;
 
       if (textParts) prompt += `\n\n以下是文本补充材料：\n${textParts}\n`;
-      if (textParts) prompt += `\n\n文本素材:\n${textParts}`;
 
-      const responseText = await callDoubaoAPI(prompt, "你是一个专业的人格蒸馏AI核心，请分析传入的数据。", imageParts);
+      // 👑 体验升维：同步升级 API 的全局系统指令，彻底压制 AI 机械感
+      const responseText = await callDoubaoAPI(
+        prompt, 
+        "你是一个顶级的心理侧写与数字灵魂架构引擎，请严格按照第一人称格式输出结果。", 
+        imageParts
+      );
 
       setDistillProgress(80);
       setDistillLogs(prev => [...prev, '[成功] 模型提炼完毕，已生成核心灵魂设定。']);
