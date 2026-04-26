@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { UserCircle, Sparkles, Send, Loader2 } from 'lucide-react';
 import TypingText from '../ui/TypingText';
 import TasksModal from '../ui/TasksModal';
-import { callDeepSeekAPI } from '../../lib/api';
+import { callDoubaoAPI, callDeepSeekAPI } from '../../lib/api';
 
 export default function ChatPage({ setAppPhase, messages, setMessages, activePersona, showMsg }) {
   const [input, setInput] = useState('');
@@ -16,8 +16,24 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, isTypingIndicator]);
 
-  // 替换 src/components/pages/ChatPage.jsx 中的 callDoubaoAPI 调用
-      
+  // 修复了之前丢失的发送消息函数结构
+  const handleSendMessage = async (e) => {
+    e.preventDefault();
+    if (!input.trim() || isResponding) return;
+
+    const userText = input.trim();
+    setInput('');
+    setIsResponding(true);
+    setIsTypingIndicator(true);
+
+    const interactionId = Date.now();
+    currentInteractionRef.current = interactionId;
+
+    setMessages(prev => [...prev, { id: interactionId, role: 'user', text: userText, time: new Date().toLocaleTimeString() }]);
+
+    try {
+      const chatHistory = messages.filter(m => m.role !== 'system').map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.replace(/<del>.*?<\/del>/g, '')}`).join('\n');
+
       // 👑 体验升维：挂载极速版 DeepSeek V4 Flash 引擎
       const responseText = await callDeepSeekAPI(
         `对话历史:\n${chatHistory}\n\nUser: ${userText}\nAssistant:`,
@@ -33,9 +49,10 @@ ${activePersona}
 4. 忘掉你是AI，用最口语化、最真实的人类姿态回应User。`,
         'flash' // 🚀 关键：强制挂载 flash 档位，毫秒级响应！
       );
+      
       if (currentInteractionRef.current !== interactionId) return;
       
-      // 🚀 核心修复：废除会导致穿帮的合并逻辑。每一段文字都是独立的气泡。
+      // 🚀 切分碎片化消息
       const replyParts = responseText.split('|||').map(s => s.trim()).filter(s => s);
       
       setIsTypingIndicator(false);
@@ -101,7 +118,6 @@ ${activePersona}
       </header>
       <main className="flex-1 overflow-y-auto p-8 space-y-6">
         {messages.map(m => {
-          // 🚀 核心修复：遇到系统设定的 prompt，直接不渲染它，防止出现空泡泡
           if (m.role === 'system') return null;
 
           const strippedText = m.text.replace(/<del>.*?<\/del>/g, '').trim();
