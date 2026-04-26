@@ -1,6 +1,7 @@
 // src/lib/api.js
 import { cloudbase } from './cloudbase';
 
+// ================== Doubao OCR 引擎 ==================
 export const callDoubaoAPI = async (promptText, systemInstructionText = null, imageParts = []) => {
   const apiMessages = [];
   if (systemInstructionText) apiMessages.push({ role: "system", content: systemInstructionText });
@@ -24,14 +25,40 @@ export const callDoubaoAPI = async (promptText, systemInstructionText = null, im
     
     const data = res.result;
     
-    // 🚀 核心修复：如果火山引擎报错（比如 Key 填错了），立刻拦截并抛出真实原因
     if (data && data.error) {
       throw new Error(data.error.message || JSON.stringify(data.error));
     }
     
     return data.choices?.[0]?.message?.content || "";
   } catch (e) {
-    // 抛出干净的错误信息给界面
     throw new Error(`${e.message}`);
+  }
+};
+
+// ================== DeepSeek 双轨制引擎 ==================
+export const callDeepSeekAPI = async (promptText, systemInstructionText = null, mode = 'pro') => {
+  const apiMessages = [];
+  if (systemInstructionText) apiMessages.push({ role: "system", content: systemInstructionText });
+  apiMessages.push({ role: "user", content: promptText });
+
+  const isPro = mode === 'pro';
+
+  try {
+    const res = await cloudbase.callFunction({
+      name: 'generate_deepseek',
+      data: { 
+        messages: apiMessages,
+        model: isPro ? 'deepseek-v4-pro' : 'deepseek-v4-flash',
+        useThinking: isPro 
+      },
+      timeout: isPro ? 60000 : 15000 
+    });
+    
+    const data = res.result;
+    if (data && data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+    
+    return data.choices?.[0]?.message?.content || "";
+  } catch (e) {
+    throw new Error(`DeepSeek 引擎宕机: ${e.message}`);
   }
 };
