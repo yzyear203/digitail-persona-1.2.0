@@ -31,8 +31,12 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
 
     setMessages(prev => [...prev, { id: interactionId, role: 'user', text: userText, time: new Date().toLocaleTimeString() }]);
 
-    try {
-      const chatHistory = messages.filter(m => m.role !== 'system').map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.replace(/<del>.*?<\/del>/g, '')}`).join('\n');
+     try {
+      // 🚀 正确的补丁位置：只取最后 12 条对话发送给大模型
+      const recentMessages = messages.filter(m => m.role !== 'system').slice(-12);
+      const chatHistory = recentMessages.map(m => 
+        `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.replace(/<del>.*?<\/del>/g, '')}`
+      ).join('\n');
 
       // 👑 体验升维：挂载极速版 DeepSeek V4 Flash 引擎
       const responseText = await callDeepSeekAPI(
