@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { UserCircle, Sparkles, Send, Loader2 } from 'lucide-react';
 import TypingText from '../ui/TypingText';
 import TasksModal from '../ui/TasksModal';
-import { callDoubaoAPI } from '../../lib/api';
+import { callDeepSeekAPI } from '../../lib/api';
 
 export default function ChatPage({ setAppPhase, messages, setMessages, activePersona, showMsg }) {
   const [input, setInput] = useState('');
@@ -16,21 +16,22 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, isTypingIndicator]);
 
-  const handleSendMessage = async (e) => {
-    e.preventDefault();
-    if (!input.trim()) return;
-    const userText = input;
-    setMessages(prev => [...prev, { id: Date.now(), role: 'user', text: userText, time: new Date().toLocaleTimeString() }]);
-    setInput('');
-    const interactionId = Date.now();
-    currentInteractionRef.current = interactionId;
-    setIsTypingIndicator(true);
-    setIsResponding(true);
-    try {
-      const chatHistory = messages.filter(m => m.role !== 'system').map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.replace(/<del>.*?<\/del>/g, '')}`).join('\n');
-      const responseText = await callDoubaoAPI(
+  // 替换 src/components/pages/ChatPage.jsx 中的 callDoubaoAPI 调用
+      
+      // 👑 体验升维：挂载极速版 DeepSeek V4 Flash 引擎
+      const responseText = await callDeepSeekAPI(
         `对话历史:\n${chatHistory}\n\nUser: ${userText}\nAssistant:`,
-        `你是一个数字备份人格。请严格遵循设定：\n${activePersona}\n输出中必须包含 <del>想删掉的话</del>！多条消息请用 "|||" 隔开。`
+        `【最高指令：彻底代入】
+你现在就是一个活生生的真实人类。以下是你自己的内心剖析和行为模式说明（你的潜意识）：
+
+${activePersona}
+
+【核心渲染机制】：
+1. 严格按照潜意识控制回复长度，必须使用 "|||" 分隔符切分连发消息。
+2. 严格使用设定的口头禅和标点习惯。
+3. 触发潜意识犹豫时，必须使用 <del>被删掉的真实想法</del> 标签。
+4. 忘掉你是AI，用最口语化、最真实的人类姿态回应User。`,
+        'flash' // 🚀 关键：强制挂载 flash 档位，毫秒级响应！
       );
       if (currentInteractionRef.current !== interactionId) return;
       
