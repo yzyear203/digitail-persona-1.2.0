@@ -24,11 +24,7 @@ export const callDoubaoAPI = async (promptText, systemInstructionText = null, im
     });
     
     const data = res.result;
-    
-    if (data && data.error) {
-      throw new Error(data.error.message || JSON.stringify(data.error));
-    }
-    
+    if (data && data.error) throw new Error(data.error.message || JSON.stringify(data.error));
     return data.choices?.[0]?.message?.content || "";
   } catch (e) {
     throw new Error(`${e.message}`);
@@ -56,7 +52,6 @@ export const callDeepSeekAPI = async (promptText, systemInstructionText = null, 
     
     const data = res.result;
     if (data && data.error) throw new Error(data.error.message || JSON.stringify(data.error));
-    
     return data.choices?.[0]?.message?.content || "";
   } catch (e) {
     throw new Error(`DeepSeek 引擎宕机: ${e.message}`);
