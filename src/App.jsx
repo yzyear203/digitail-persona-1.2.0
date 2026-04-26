@@ -69,18 +69,36 @@ export default function App() {
   };
 
   // 2. 开始启动 AI 多模态人格蒸馏
-  const handleStartDistillation = async () => {
-    if (uploadedFiles.length === 0) return;
-    setAppPhase('distilling');
-    setDistillProgress(10);
-    setDistillLogs(['[初始化] 启动数字资产多模态编译器...']);
-
-    try {
+try {
       const imageParts = uploadedFiles.filter(f => f.isImage);
       const textParts = uploadedFiles.filter(f => f.isText).map(f => f.textContent).join('\n');
+      let combinedChatText = textParts;
 
-      setDistillProgress(40);
-      setDistillLogs(prev => [...prev, '[连接中] 正在将素材上行至大模型云端节点进行特征提取...']);
+      // ================= 阶段一：Doubao 视觉感知 (OCR) =================
+      if (imageParts.length > 0) {
+        setDistillProgress(30);
+        setDistillLogs(prev => [...prev, '[视觉感知] 唤醒 Doubao 视觉中枢，进行高精度 OCR 剥离...']);
+        
+        const ocrPrompt = `你现在是一个无情的 OCR 提取机器。
+请提取图片中的所有聊天记录，按时间顺序整理成以下纯文本格式：
+A: [说话内容]
+B: [说话内容]
+如果图片中有系统提示（如撤回、拍了拍），请用括号标注。
+【严禁做任何分析、解释或多余的问候，只输出聊天文本！】`;
+
+        const ocrResult = await callDoubaoAPI(
+          ocrPrompt, 
+          "你是一个只负责提取文本的机器部件。", 
+          imageParts
+        );
+        
+        combinedChatText += `\n\n[来自图片的聊天记录]:\n${ocrResult}`;
+        setDistillLogs(prev => [...prev, '[视觉感知] 图文转译完毕，素材已提纯。']);
+      }
+
+      // ================= 阶段二：DeepSeek 深度心理侧写 =================
+      setDistillProgress(60);
+      setDistillLogs(prev => [...prev, '[深度认知] 图文素材已移交 DeepSeek 引擎，启动 BAU 临床级侧写...']);
 
       let prompt = `你是一个融合了顶级行为学专家与 FBI 犯罪心理侧写师能力的数字人格架构师。
 
@@ -136,17 +154,16 @@ export default function App() {
 
 最后，请用一句话总结这个人给对方带来的整体聊天感受（如压迫感、窒息感、或温暖感）。`;
 
-      if (textParts) prompt += `\n\n以下是文本补充材料：\n${textParts}\n`;
+      if (combinedChatText) prompt += `\n\n【必须进行分析的聊天记录原始切片】：\n${combinedChatText}\n`;
 
-      // 👑 体验升维：同步升级 API 的全局系统指令，彻底压制 AI 机械感
-      const responseText = await callDoubaoAPI(
+      // 调用 DeepSeek 纯文本推理！速度会极快！
+      const responseText = await callDeepSeekAPI(
         prompt, 
-        "你是一个顶级的心理侧写与数字灵魂架构引擎，请严格按照第一人称格式输出结果。", 
-        imageParts
+        "你是一个顶级的心理侧写与数字灵魂架构引擎，请严格按照第一人称格式输出结果。"
       );
 
-      setDistillProgress(80);
-      setDistillLogs(prev => [...prev, '[成功] 模型提炼完毕，已生成核心灵魂设定。']);
+      setDistillProgress(90);
+      setDistillLogs(prev => [...prev, '[成功] DeepSeek 灵魂推演完毕，已生成核心设定。']);
       setDistillLogs(prev => [...prev, '[刻录] 正在将数字生命档案刻录至数据库...']);
 
       const newPersona = {
@@ -156,14 +173,11 @@ export default function App() {
         createdAt: Date.now()
       };
 
-      if (db) {
-        await db.collection('personas').add(newPersona);
-      }
+      if (db) await db.collection('personas').add(newPersona);
 
       setDistillProgress(100);
       setDistillLogs(prev => [...prev, '[完成] 资产刻录成功！即将唤醒工作台...']);
 
-      // 延迟跳转，让用户看清完成状态
       setTimeout(() => {
         setUploadedFiles([]);
         fetchSavedPersonas();
@@ -172,7 +186,7 @@ export default function App() {
 
     } catch (error) {
       setDistillLogs(prev => [...prev, `[异常终止] 蒸馏失败: ${error.message}`]);
-      showMsg(`❌ 蒸馏失败，大模型连接异常: ${error.message}`);
+      showMsg(`❌ 编译链断裂: ${error.message}`);
       setTimeout(() => setAppPhase('dashboard'), 3500);
     }
   };
