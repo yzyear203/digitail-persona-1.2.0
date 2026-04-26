@@ -55,8 +55,7 @@ ${activePersona}
       
       if (currentInteractionRef.current !== interactionId) return;
       
-      // 🚀 切分碎片化消息
-      const replyParts = responseText.split('|||').map(s => s.trim()).filter(s => s);
+      const replyParts = responseText.split(/\|\|\||-{3,}|={3,}/).map(s => s.trim()).filter(s => s);
       
       setIsTypingIndicator(false);
       
