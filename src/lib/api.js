@@ -41,7 +41,7 @@ export const callDeepSeekAPI = async (promptText, systemInstructionText = null, 
 
   try {
     const res = await cloudbase.callFunction({
-      name: 'generate_deepseek',
+      name: 'deepseek_generate', // 👑 核心修复：将 'generate_deepseek' 改为 'deepseek_generate'
       data: { 
         messages: apiMessages,
         model: isPro ? 'deepseek-v4-pro' : 'deepseek-v4-flash',
