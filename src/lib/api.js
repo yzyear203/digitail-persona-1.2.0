@@ -32,28 +32,41 @@ export const callDoubaoAPI = async (promptText, systemInstructionText = null, im
 };
 
 // ================== DeepSeek 双轨制引擎 ==================
-export const callDeepSeekAPI = async (promptText, systemInstructionText = null, mode = 'pro') => {
+export const callDeepSeekAPI = async (promptText, systemInstructionText = null, mode = 'pro', signal = null) => {
   const apiMessages = [];
   if (systemInstructionText) apiMessages.push({ role: "system", content: systemInstructionText });
   apiMessages.push({ role: "user", content: promptText });
 
   const isPro = mode === 'pro';
 
-  try {
-    const res = await cloudbase.callFunction({
-      name: 'deepseek_generate', // 👑 核心修复：将 'generate_deepseek' 改为 'deepseek_generate'
-      data: { 
-        messages: apiMessages,
-        model: isPro ? 'deepseek-v4-pro' : 'deepseek-v4-flash',
-        useThinking: isPro 
-      },
-      timeout: isPro ? 60000 : 15000 
-    });
-    
-    const data = res.result;
-    if (data && data.error) throw new Error(data.error.message || JSON.stringify(data.error));
-    return data.choices?.[0]?.message?.content || "";
-  } catch (e) {
-    throw new Error(`DeepSeek 引擎宕机: ${e.message}`);
-  }
+  // 🚀 核心升级：注入 AbortController 物理阻断机制
+  return new Promise(async (resolve, reject) => {
+    // 注册防章鱼拦截监听器
+    if (signal) {
+      signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+      if (signal.aborted) return reject(new DOMException('Aborted', 'AbortError'));
+    }
+
+    try {
+      // 注意：如果未来切换为 Fetch 直连大模型，只需在此处 fetch(url, { signal }) 即可实现真正的 GPU 毫秒级断连
+      const res = await cloudbase.callFunction({
+        name: 'deepseek_generate',
+        data: { 
+          messages: apiMessages,
+          model: isPro ? 'deepseek-v4-pro' : 'deepseek-v4-flash',
+          useThinking: isPro 
+        },
+        timeout: isPro ? 60000 : 15000 
+      });
+      
+      // 异步回来后再次检查是否已被阻断，如果是，抛弃数据
+      if (signal && signal.aborted) return reject(new DOMException('Aborted', 'AbortError'));
+
+      const data = res.result;
+      if (data && data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+      resolve(data.choices?.[0]?.message?.content || "");
+    } catch (e) {
+      reject(new Error(`DeepSeek 引擎宕机: ${e.message}`));
+    }
+  });
 };
