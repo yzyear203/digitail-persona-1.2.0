@@ -14,9 +14,29 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   const currentInteractionRef = useRef(0);
   const messagesEndRef = useRef(null);
 
+  // 🚀 新增：生成当前分身的唯一本地缓存 Key
+  const chatKey = `chat_history_${activePersona ? activePersona.substring(0, 15).replace(/\s/g, '') : 'default'}`;
+
+  // 🚀 新增：初始化时从 LocalStorage 加载聊天记录
+  useEffect(() => {
+    if (messages.length === 1 && messages[0].role === 'system') {
+      const savedHistory = localStorage.getItem(chatKey);
+      if (savedHistory) {
+        setMessages(JSON.parse(savedHistory));
+      }
+    }
+  }, [chatKey]); // 仅在加载新人格时触发
+
+  // 🚀 新增：消息变动时自动写入 LocalStorage
+  useEffect(() => {
+    if (messages.length > 1) { // 超过 1 条（即除了系统提示词还有其他对话）才保存
+      localStorage.setItem(chatKey, JSON.stringify(messages));
+    }
+  }, [messages, chatKey]);
+
+  // 自动滚动到底部
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, isTypingIndicator]);
 
-  // 修复了之前丢失的发送消息函数结构
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!input.trim() || isResponding) return;
@@ -31,8 +51,8 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
 
     setMessages(prev => [...prev, { id: interactionId, role: 'user', text: userText, time: new Date().toLocaleTimeString() }]);
 
-     try {
-      // 🚀 正确的补丁位置：只取最后 12 条对话发送给大模型
+    try {
+      // 🚀 补丁：滑动窗口截断，只取最后 12 条对话发送给大模型，防止记忆稀释导致人设崩塌
       const recentMessages = messages.filter(m => m.role !== 'system').slice(-12);
       const chatHistory = recentMessages.map(m => 
         `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.replace(/<del>.*?<\/del>/g, '')}`
@@ -41,7 +61,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
       // 👑 体验升维：挂载极速版 DeepSeek V4 Flash 引擎
       const responseText = await callDeepSeekAPI(
         `对话历史:\n${chatHistory}\n\nUser: ${userText}\nAssistant:`,
-`【最高指令：彻底代入】
+        `【最高指令：彻底代入】
 你现在就是一个活生生的真实人类。以下是你自己的内心剖析和行为模式说明（你的潜意识）：
 
 ${activePersona}
@@ -54,12 +74,13 @@ ${activePersona}
 2. 严格使用设定的口头禅和标点习惯。
 3. 触发潜意识犹豫时，必须使用 <del>被删掉的真实想法</del> 标签。
 4. 忘掉你是AI，用最口语化、最真实的人类姿态回应User。`,
-        'flash' // 🚀 关键：强制挂载 flash 档位，毫秒级响应！
+        'flash' 
       );
       
       if (currentInteractionRef.current !== interactionId) return;
       
-      const replyParts = responseText.split(/\|\|\||-{3,}|={3,}/).map(s => s.trim()).filter(s => s);
+      // 🚀 补丁：防御性正则切分，兼容大模型自行发明的 ---- 或换行符，防止超长消息无法切分
+      const replyParts = responseText.split(/\|\|\||-{3,}|={3,}|\n{2,}/).map(s => s.trim()).filter(s => s);
       
       setIsTypingIndicator(false);
       
@@ -89,9 +110,10 @@ ${activePersona}
     }
   };
 
-const handleExtractTasks = async () => {
+  const handleExtractTasks = async () => {
     setIsExtracting(true);
     try {
+      // 🧹 清理了这里原本错误的滑动窗口覆盖声明，恢复纯净的提取逻辑
       const chatHistory = messages.filter(m => m.role !== 'system').map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.replace(/<del>.*?<\/del>/g, '')}`).join('\n');
       
       const jsonResponse = await callDoubaoAPI(`分析对话，提取所有代办事项，没有返回空数组。\n\n${chatHistory}`, '严格输出 JSON 字符串数组，例如：["联系张三", "发送邮件"]。');
@@ -133,7 +155,8 @@ const handleExtractTasks = async () => {
               <div className={`max-w-[75%] px-6 py-4 rounded-3xl shadow-sm text-[15px] font-medium leading-relaxed ${m.role === 'user' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white text-slate-800 border border-slate-200 rounded-bl-none'}`}>
                 {m.role === 'assistant' && m.isAnimated
                   ? <TypingText content={m.text} persona={activePersona} scrollRef={messagesEndRef} onComplete={() => setMessages(p => p.map(msg => msg.id === m.id ? { ...msg, isAnimated: false } : msg))} />
-                  : (strippedText ? strippedText : <span className="italic text-slate-400 text-sm">（撤回了一条消息）</span>)}
+                  // 🚀 补丁：给静态文本也加上 whitespace-pre-wrap 防止空行被 CSS 吞噬塌陷
+                  : (strippedText ? <span className="whitespace-pre-wrap">{strippedText}</span> : <span className="italic text-slate-400 text-sm">（撤回了一条消息）</span>)}
                 <span className={`block text-[10px] mt-2 font-black opacity-50 ${m.role === 'user' ? 'text-indigo-100' : 'text-slate-400'}`}>{m.time}</span>
               </div>
             </div>
