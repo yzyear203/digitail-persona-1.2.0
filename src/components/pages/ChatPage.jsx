@@ -161,22 +161,29 @@ ${activePersona}
                 </div>
               )}
               
-              {/* 微信同款：居中撤回消息提示 */}
-              {!strippedText && m.role === 'assistant' ? (
+             {/* 微信同款：居中撤回消息提示 */}
+              {m.role === 'assistant' && m.isAnimated ? (
+                // 动画阶段：强制渲染打字机（包括打出文字再删掉的退格动画），释放 Promise 锁
+                <div className="flex flex-col items-start mb-6">
+                  <div className="max-w-[75%] px-6 py-4 rounded-3xl shadow-sm text-[15px] font-medium leading-relaxed bg-white text-slate-800 border border-slate-200 rounded-bl-none">
+                    <TypingText content={m.text} persona={activePersona} scrollRef={messagesEndRef} onComplete={() => setMessages(p => p.map(msg => msg.id === m.id ? { ...msg, isAnimated: false } : msg))} />
+                  </div>
+                </div>
+              ) : (!strippedText && m.role === 'assistant' ? (
+                // 动画结束且无实质内容阶段：渲染居中的灰色撤回提示
                 <div className="flex justify-center my-4">
                   <span className="text-xs text-slate-500 font-medium bg-slate-200/60 px-3 py-1 rounded-md">
                     "对方" 撤回了一条消息
                   </span>
                 </div>
               ) : (
+                // 正常消息渲染阶段
                 <div className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'} mb-6`}>
                   <div className={`max-w-[75%] px-6 py-4 rounded-3xl shadow-sm text-[15px] font-medium leading-relaxed ${m.role === 'user' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white text-slate-800 border border-slate-200 rounded-bl-none'}`}>
-                    {m.role === 'assistant' && m.isAnimated
-                      ? <TypingText content={m.text} persona={activePersona} scrollRef={messagesEndRef} onComplete={() => setMessages(p => p.map(msg => msg.id === m.id ? { ...msg, isAnimated: false } : msg))} />
-                      : <span className="whitespace-pre-wrap">{strippedText}</span>}
+                    <span className="whitespace-pre-wrap">{strippedText}</span>
                   </div>
                 </div>
-              )}
+              ))}
             </React.Fragment>
           );
         })}
