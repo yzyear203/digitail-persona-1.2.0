@@ -64,7 +64,20 @@ export default function DashboardPage({ userProfile, savedPersonas, uploadedFile
             </div>
             <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
               {savedPersonas.map(p => (
-                <PersonaCard key={p.id} persona={p} onClick={() => loadPersonaAndChat(p)} onDelete={handleDeleteSavedPersona} />
+                <PersonaCard 
+                  key={p.id} 
+                  persona={p} 
+                  onClick={() => loadPersonaAndChat(p)} 
+                  onDelete={handleDeleteSavedPersona} 
+                  onShare={(e, p) => {
+                    e.stopPropagation();
+                    // 生成专属裂变链接
+                    const shareUrl = `${window.location.origin}${window.location.pathname}?shareId=${p.id}`;
+                    // 写入剪贴板
+                    navigator.clipboard.writeText(`我刚刚蒸馏出了数字分身【${p.name}】，性格极其真实，快来试探一下！\n🔗 链接直达: ${shareUrl}`);
+                    alert('✅ 裂变链接已复制！马上发给微信好友或群聊吧。');
+                  }}
+                />
               ))}
             </div>
           </div>
