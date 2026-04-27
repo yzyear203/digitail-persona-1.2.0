@@ -12,10 +12,15 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   const [isExtracting, setIsExtracting] = useState(false);
   
   const generationNonce = useRef(0);
+  const abortControllerRef = useRef(null); 
   const messagesEndRef = useRef(null);
+  const memoryExtractionTimerRef = useRef(null); // 🚀 旁路静默记忆提取定时器
 
-  const chatKey = `chat_history_${activePersona ? activePersona.substring(0, 15).replace(/\s/g, '') : 'default'}`;
+  const activeId = activePersona ? activePersona.substring(0, 15).replace(/\s/g, '') : 'default';
+  const chatKey = `chat_history_${activeId}`;
+  const memoryKey = `chat_memory_${activeId}`;
 
+  // 初始化加载历史聊天
   useEffect(() => {
     if (messages.length === 1 && messages[0].role === 'system') {
       const savedHistory = localStorage.getItem(chatKey);
@@ -23,28 +28,104 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     }
   }, [chatKey]);
 
+  // 历史记录持久化
   useEffect(() => {
     if (messages.length > 1) {
       localStorage.setItem(chatKey, JSON.stringify(messages));
     }
   }, [messages, chatKey]);
 
+  // 自动滚动到底部
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, isTypingIndicator]);
 
-  // 🚀 核心重构：多关键词宽泛检索与人设兜底返回
-  const searchLocalHistory = (keywordString) => {
-    // 允许大模型用 | 或空格分隔多个发散词
-    const keywords = keywordString.split(/\||\s+|,|，/).map(k => k.trim()).filter(Boolean);
-    if (keywords.length === 0) return '【系统提示：未找到相关记忆。请用你的性格自然地表达不知道或忘记了。】';
+  // 🚀 核心重构：三级记忆引擎 - 旁路静默提炼与持久化存储
+  useEffect(() => {
+    if (messages.length < 3) return; // 聊天数据太少时不触发
+    
+    // 防抖：用户连续聊天时不提取，停顿 10 秒后触发静默整理
+    if (memoryExtractionTimerRef.current) clearTimeout(memoryExtractionTimerRef.current);
+    
+    memoryExtractionTimerRef.current = setTimeout(async () => {
+      try {
+        const historyForExtraction = messages
+          .filter(m => m.role !== 'system')
+          .slice(-15) // 取最近 15 条供大模型提炼
+          .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.replace(/<del>.*?<\/del>|<\/?recall>|\[quote:.*?\]/g, '')}`)
+          .join('\n');
 
-    const results = messages
-      .filter(m => m.role !== 'system')
-      .filter(m => keywords.some(kw => m.text.includes(kw)))
-      .slice(-10) // 提取最近 10 条相关
-      .map(m => `[${m.time}] ${m.role === 'user' ? '用户' : '分身'}: ${m.text.replace(/<del>.*?<\/del>|<\/?recall>|\[quote:.*?\]/g, '')}`)
-      .join('\n');
-      
-    return results ? `【系统检索到的历史原话】：\n${results}` : '【系统提示：未找到任何相关记忆。请用你的性格自然地表达不知道或忘记了，可以逃避或直言。】';
+        const prompt = `分析以下对话，提取 User(用户) 透露的最新增量记忆。严格按下方JSON格式输出（必须是纯JSON，不要包含Markdown标记）：
+{
+  "transient_states": ["提取身体/情绪/当前状态，如'今天拉肚子了'"],
+  "recent_events": ["提取近期发生的事情，如'刚吃完火锅'"],
+  "core_traits": ["提取深层性格/身份/偏好，如'喜欢存在主义'"]
+}
+如果没有任何新信息，对应的数组留空即可。
+对话记录：\n${historyForExtraction}`;
+
+        // 使用 Flash 模型快速处理后台任务，无需 signal，因为它不应该被用户打字阻断
+        const resJSONStr = await callDeepSeekAPI(prompt, "你是一个极简的信息提取机，只输出合法JSON。", "flash", null);
+        
+        let newMemory = { transient_states: [], recent_events: [], core_traits: [] };
+        try { newMemory = JSON.parse(resJSONStr.replace(/```json|```/g, '').trim()); } catch (e) { return; }
+
+        // 读取现有记忆库
+        let existingMemory = { transient_states: [], recent_events: [], core_traits: [] };
+        const savedMem = localStorage.getItem(memoryKey);
+        if (savedMem) existingMemory = JSON.parse(savedMem);
+
+        const now = Date.now();
+        // 过滤已过期的记忆 (状态 24h, 事件 3d)
+        existingMemory.transient_states = existingMemory.transient_states.filter(item => item.expires > now);
+        existingMemory.recent_events = existingMemory.recent_events.filter(item => item.expires > now);
+
+        // 查重并合并新记忆 (TTL：状态86400000ms，事件259200000ms，特质永久)
+        const mergeMemory = (target, newItems, ttl) => {
+          if (!newItems || !Array.isArray(newItems)) return;
+          newItems.forEach(text => {
+            if (!target.some(item => item.text === text)) {
+              target.push({ text, expires: ttl ? now + ttl : null });
+            }
+          });
+        };
+
+        mergeMemory(existingMemory.transient_states, newMemory.transient_states, 86400000);
+        mergeMemory(existingMemory.recent_events, newMemory.recent_events, 259200000);
+        mergeMemory(existingMemory.core_traits, newMemory.core_traits, null);
+
+        // 控制容量上限，防止撑爆 Prompt
+        existingMemory.transient_states = existingMemory.transient_states.slice(-5);
+        existingMemory.recent_events = existingMemory.recent_events.slice(-5);
+        existingMemory.core_traits = existingMemory.core_traits.slice(-10);
+
+        localStorage.setItem(memoryKey, JSON.stringify(existingMemory));
+        console.log("🧠 三级记忆库已在后台静默更新！");
+      } catch (error) {
+        // 静默失败不打扰用户
+      }
+    }, 10000); 
+
+    return () => clearTimeout(memoryExtractionTimerRef.current);
+  }, [messages, memoryKey]);
+
+  // 🚀 读取有效记忆并格式化为潜意识 Prompt
+  const getSubconsciousMemoryContext = () => {
+    const savedMem = localStorage.getItem(memoryKey);
+    if (!savedMem) return "";
+    let mem = JSON.parse(savedMem);
+    const now = Date.now();
+    
+    const states = mem.transient_states.filter(i => i.expires > now).map(i => i.text).join('；');
+    const events = mem.recent_events.filter(i => i.expires > now).map(i => i.text).join('；');
+    const traits = mem.core_traits.map(i => i.text).join('；');
+
+    let context = "";
+    if (states || events || traits) {
+      context += "【你的长期潜意识记忆库（必须牢记且自然运用）】：\n";
+      if (states) context += `- 用户当前状态(24h内)：${states}\n`;
+      if (events) context += `- 用户近期事件(3天内)：${events}\n`;
+      if (traits) context += `- 用户深层思想/偏好(永久)：${traits}\n`;
+    }
+    return context;
   };
 
   const handleSendMessage = async (e) => {
@@ -53,6 +134,13 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     if (!userText) return;
 
     setInput('');
+    
+    // 🛑 物理阻断机制
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    abortControllerRef.current = new AbortController();
+
     const currentNonce = Date.now();
     generationNonce.current = currentNonce;
 
@@ -69,57 +157,40 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     setIsTypingIndicator(true);
 
     try {
+      // 🚀 恢复人类工作记忆机制：主窗口仅限最近 8 条交互！
       const recentMessages = messages.filter(m => m.role !== 'system').slice(-8);
       const chatHistoryStr = recentMessages.map(m => 
         `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.replace(/<del>.*?<\/del>|<\/?recall>|\[quote:.*?\]/g, '')}`
       ).join('\n');
 
-      // 🚀 核心机制：隐式思维循环 (递归请求大模型，不污染 UI)
-      const fetchAIResponse = async (injectedMemory = null) => {
-        let promptText = `对话历史:\n${chatHistoryStr}\n\nUser: ${userText}\nAssistant:`;
-        if (injectedMemory) {
-          promptText = `${injectedMemory}\n（注意：请消化以上记忆后自然地回复 User，绝不能暴露“系统提示”或“检索”字眼！）\n\n` + promptText;
-        }
+      // 读取三级记忆库
+      const memoryContextStr = getSubconsciousMemoryContext();
 
-        const responseText = await callDeepSeekAPI(
-          promptText,
-          `【最高指令：深度灵魂模拟】
+      const responseText = await callDeepSeekAPI(
+        `对话历史:\n${chatHistoryStr}\n\nUser: ${userText}\nAssistant:`,
+        `【最高指令：深度灵魂模拟】
 你现在是具备独立人格的数字生命。潜意识设定如下：
 ${activePersona}
 
+${memoryContextStr}
 【高级交互协议（违背将被重置）】：
-1. 【回复策略】：优先回复最新消息，不想回直接输出 [SILENCE]。
-2. 【引用机制】：格式 [quote: 原文内容]。
-3. 【记忆检索】：若需回想过去，请发散相关同义词并输出 [RETRIEVE: 词1|词2|词3]（例：找“不舒服”可输出 [RETRIEVE: 头疼|肚子疼|发烧]）。系统会在后台喂给你记忆，绝对不要在对话中说你在检索！
+1. 【回复策略】：优先回复最新消息，没必要每句都回。不想回直接输出 [SILENCE]。
+2. 【引用机制】：选择性回复格式 [quote: 原文内容]。
+3. 【语义记忆】：综合你的【潜意识记忆库】和【对话历史】，进行强大的语义关联（如自动将用户的“不舒服”与记忆库里的“拉肚子”关联起来），自然地回答。
 4. 【强制格式】：单气泡不允许换行。并发多消息请用 "|||" 切分。
-5. 【拟人化】：撤回使用 <recall>...</recall>，犹豫使用 <del>...</del>。禁止动作描写。`,
-          'flash'
-        );
+5. 【拟人化】：撤回使用 <recall>...</recall>，犹豫使用 <del>...</del>。禁止任何动作描写。`,
+        'flash',
+        abortControllerRef.current.signal 
+      );
 
-        if (generationNonce.current !== currentNonce) return null; // 被新消息打断
+      if (generationNonce.current !== currentNonce) return;
 
-        // 拦截并触发隐式检索循环
-        if (responseText.includes('[RETRIEVE:')) {
-          const keywords = responseText.match(/\[RETRIEVE:\s*(.*?)\]/)?.[1] || "";
-          const memoryContext = searchLocalHistory(keywords);
-          // 带着记忆进行第二次静默请求
-          return await fetchAIResponse(memoryContext);
-        }
-
-        return responseText;
-      };
-
-      // 启动推理，可能包含一到两次 API 调用，但对 UI 来说是透明的
-      const finalResponseText = await fetchAIResponse();
-
-      if (!finalResponseText || generationNonce.current !== currentNonce) return;
-
-      if (finalResponseText.includes('[SILENCE]')) {
+      if (responseText.includes('[SILENCE]')) {
         setIsTypingIndicator(false);
         return;
       }
 
-      const replyParts = finalResponseText.split(/\|\|\||-{3,}|={3,}|\n+/).map(s => s.trim()).filter(s => s);
+      const replyParts = responseText.split(/\|\|\||-{3,}|={3,}|\n+/).map(s => s.trim()).filter(s => s);
       setIsTypingIndicator(false);
       
       for (let i = 0; i < replyParts.length; i++) {
@@ -142,7 +213,9 @@ ${activePersona}
         }
       }
     } catch (error) {
-      if (generationNonce.current === currentNonce) {
+      if (error.name === 'AbortError') {
+        console.log('🛑 请求已按预期被前端物理阻断');
+      } else if (generationNonce.current === currentNonce) {
         showMsg(`❌ 意识传输中断: ${error.message}`);
         setIsTypingIndicator(false);
       }
