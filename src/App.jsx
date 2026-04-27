@@ -215,9 +215,10 @@ B: [说话内容]
       setTimeout(() => setAppPhase('dashboard'), 3500);
     }
   };
-  // 3. 将档案载入聊天引擎
+ // 3. 将档案载入聊天引擎
   const loadPersonaAndChat = (persona) => {
-    setActivePersona(persona.content);
+    // 🚀 核心修复：传递完整的 persona 对象（包含 name, content, id）
+    setActivePersona(persona);
     // 初始化系统指令气泡（隐藏气泡），由于这是加载页面，所以无需触发动画
     setMessages([
       { id: Date.now(), role: 'system', text: persona.content, time: new Date().toLocaleTimeString(), isAnimated: false }
