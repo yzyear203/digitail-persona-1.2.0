@@ -71,37 +71,25 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
         let newMemory = { transient_states: [], recent_events: [], core_traits: [] };
         try { newMemory = JSON.parse(resJSONStr.replace(/```json|```/g, '').trim()); } catch (e) { return; }
 
-        // 读取现有记忆库
-        let existingMemory = { transient_states: [], recent_events: [], core_traits: [] };
-        const savedMem = localStorage.getItem(memoryKey);
-        if (savedMem) existingMemory = JSON.parse(savedMem);
+        // 提取出所有有效文本
+        const memoryItems = [
+          ...newMemory.transient_states,
+          ...newMemory.recent_events,
+          ...newMemory.core_traits
+        ];
 
-        const now = Date.now();
-        // 过滤已过期的记忆 (状态 24h, 事件 3d)
-        existingMemory.transient_states = existingMemory.transient_states.filter(item => item.expires > now);
-        existingMemory.recent_events = existingMemory.recent_events.filter(item => item.expires > now);
-
-        // 查重并合并新记忆 (TTL：状态86400000ms，事件259200000ms，特质永久)
-        const mergeMemory = (target, newItems, ttl) => {
-          if (!newItems || !Array.isArray(newItems)) return;
-          newItems.forEach(text => {
-            if (!target.some(item => item.text === text)) {
-              target.push({ text, expires: ttl ? now + ttl : null });
+        if (memoryItems.length > 0) {
+          // 🚀 V2.0 升级：直接呼叫云函数，将新记忆送入 TCB 向量库进行 Embedding
+          const { cloudbase } = await import('../../lib/cloudbase');
+          await cloudbase.callFunction({
+            name: 'vectorize_memory',
+            data: { 
+              personaId: activeId,
+              memories: memoryItems
             }
           });
-        };
-
-        mergeMemory(existingMemory.transient_states, newMemory.transient_states, 86400000);
-        mergeMemory(existingMemory.recent_events, newMemory.recent_events, 259200000);
-        mergeMemory(existingMemory.core_traits, newMemory.core_traits, null);
-
-        // 控制容量上限，防止撑爆 Prompt
-        existingMemory.transient_states = existingMemory.transient_states.slice(-5);
-        existingMemory.recent_events = existingMemory.recent_events.slice(-5);
-        existingMemory.core_traits = existingMemory.core_traits.slice(-10);
-
-        localStorage.setItem(memoryKey, JSON.stringify(existingMemory));
-        console.log("🧠 三级记忆库已在后台静默更新！");
+          console.log("🧠 增量记忆已成功推流至云端向量库！");
+        }
       } catch (error) {
         // 静默失败不打扰用户
       }
@@ -111,26 +99,9 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   }, [messages, memoryKey]);
 
   // 🚀 读取有效记忆并格式化为潜意识 Prompt
-  const getSubconsciousMemoryContext = () => {
-    const savedMem = localStorage.getItem(memoryKey);
-    if (!savedMem) return "";
-    let mem = JSON.parse(savedMem);
-    const now = Date.now();
-    
-    const states = mem.transient_states.filter(i => i.expires > now).map(i => i.text).join('；');
-    const events = mem.recent_events.filter(i => i.expires > now).map(i => i.text).join('；');
-    const traits = mem.core_traits.map(i => i.text).join('；');
-
-    let context = "";
-    if (states || events || traits) {
-      context += "【你与用户的长期潜意识记忆库（包含双方状态，必须牢记且自然运用）】：\n";
-      if (states) context += `- 双方当前状态(24h内)：${states}\n`;
-      if (events) context += `- 双方近期事件(3天内)：${events}\n`;
-      if (traits) context += `- 双方深层思想/偏好(永久)：${traits}\n`;
-    }
-    return context;
-  };
-
+  // 🚀 原本地记忆读取机制已彻底粉碎，交由云端 Tool Calls 自主接管
+  // 留空以兼容上下文变量引用
+  const getSubconsciousMemoryContext = () => "";
   const handleSendMessage = async (e) => {
     if (e) e.preventDefault();
     const userText = input.trim();
