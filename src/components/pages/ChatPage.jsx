@@ -53,11 +53,11 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
           .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.replace(/<del>.*?<\/del>|<\/?recall>|\[quote:.*?\]/g, '')}`)
           .join('\n');
 
-        const prompt = `分析以下对话，提取 User(用户) 透露的最新增量记忆。严格按下方JSON格式输出（必须是纯JSON，不要包含Markdown标记）：
+        const prompt = `分析以下对话，提取 User(用户) 和 Assistant(分身/你) 双方透露的最新增量记忆。请务必在每条记忆前标明主语（例如：[用户] 或 [分身]）。严格按下方JSON格式输出（必须纯JSON，无Markdown）：
 {
-  "transient_states": ["提取身体/情绪/当前状态，如'今天拉肚子了'"],
-  "recent_events": ["提取近期发生的事情，如'刚吃完火锅'"],
-  "core_traits": ["提取深层性格/身份/偏好，如'喜欢存在主义'"]
+  "transient_states": ["双方身体/情绪/当前状态，如'[用户]今天拉肚子了', '[分身]感觉有点累'"],
+  "recent_events": ["双方近期发生的事情，如'[用户]刚吃完火锅', '[分身]刚才去开会了'"],
+  "core_traits": ["双方深层性格/身份/设定，如'[用户]喜欢存在主义', '[分身]是一个嘴硬心软的人'"]
 }
 如果没有任何新信息，对应的数组留空即可。
 对话记录：\n${historyForExtraction}`;
@@ -120,10 +120,10 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
 
     let context = "";
     if (states || events || traits) {
-      context += "【你的长期潜意识记忆库（必须牢记且自然运用）】：\n";
-      if (states) context += `- 用户当前状态(24h内)：${states}\n`;
-      if (events) context += `- 用户近期事件(3天内)：${events}\n`;
-      if (traits) context += `- 用户深层思想/偏好(永久)：${traits}\n`;
+      context += "【你与用户的长期潜意识记忆库（包含双方状态，必须牢记且自然运用）】：\n";
+      if (states) context += `- 双方当前状态(24h内)：${states}\n`;
+      if (events) context += `- 双方近期事件(3天内)：${events}\n`;
+      if (traits) context += `- 双方深层思想/偏好(永久)：${traits}\n`;
     }
     return context;
   };
