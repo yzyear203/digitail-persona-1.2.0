@@ -13,9 +13,14 @@ export default function PersonaCard({ persona, onClick, onDelete, onShare }) {
           <span className="text-[10px] text-slate-400">{new Date(persona.createdAt).toLocaleDateString()}</span>
         </div>
       </div>
-      <button onClick={e => { e.stopPropagation(); onDelete(e, persona.id); }} className="text-slate-300 hover:text-red-500 p-2">
-        <Trash2 size={18}/>
-      </button>
+      <div className="flex items-center">
+        <button onClick={e => { e.stopPropagation(); onShare(e, persona); }} className="text-slate-300 hover:text-indigo-500 p-2 transition-colors">
+          <Share2 size={18}/>
+        </button>
+        <button onClick={e => { e.stopPropagation(); onDelete(e, persona.id); }} className="text-slate-300 hover:text-red-500 p-2 transition-colors">
+          <Trash2 size={18}/>
+        </button>
+      </div>
     </div>
   );
 }
