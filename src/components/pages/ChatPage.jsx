@@ -324,11 +324,11 @@ ${memoryContextStr}
                       </div>
                     )}
                     
-                    {m.role === 'assistant' && m.isAnimated ? (
+                   {m.role === 'assistant' && m.isAnimated ? (
                       <TypingText 
                         content={actualText} 
-                        persona={activePersona} 
-                        scrollRef={messagesEndRef} 
+                        persona={personaContent} 
+                        scrollRef={messagesEndRef}
                         onComplete={() => {
                           if (isRecallMsg) {
                             setTimeout(() => {
