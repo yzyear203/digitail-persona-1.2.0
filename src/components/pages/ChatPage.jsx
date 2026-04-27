@@ -11,7 +11,6 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   const [extractedTasks, setExtractedTasks] = useState([]);
   const [isExtracting, setIsExtracting] = useState(false);
   
-  // 🚀 新增：并发拦截唯一通行证 (Nonce)
   const generationNonce = useRef(0);
   const messagesEndRef = useRef(null);
 
@@ -32,33 +31,36 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, isTypingIndicator]);
 
-  const searchLocalHistory = (keyword) => {
+  // 🚀 核心重构：多关键词宽泛检索与人设兜底返回
+  const searchLocalHistory = (keywordString) => {
+    // 允许大模型用 | 或空格分隔多个发散词
+    const keywords = keywordString.split(/\||\s+|,|，/).map(k => k.trim()).filter(Boolean);
+    if (keywords.length === 0) return '【系统提示：未找到相关记忆。请用你的性格自然地表达不知道或忘记了。】';
+
     const results = messages
-      .filter(m => m.role !== 'system' && m.text.includes(keyword))
-      .slice(-5)
-      .map(m => `[${m.time}] ${m.role === 'user' ? '用户' : '分身'}: ${m.text}`)
+      .filter(m => m.role !== 'system')
+      .filter(m => keywords.some(kw => m.text.includes(kw)))
+      .slice(-10) // 提取最近 10 条相关
+      .map(m => `[${m.time}] ${m.role === 'user' ? '用户' : '分身'}: ${m.text.replace(/<del>.*?<\/del>|<\/?recall>|\[quote:.*?\]/g, '')}`)
       .join('\n');
-    return results || '未找到相关记忆。';
+      
+    return results ? `【系统检索到的历史原话】：\n${results}` : '【系统提示：未找到任何相关记忆。请用你的性格自然地表达不知道或忘记了，可以逃避或直言。】';
   };
 
-  const handleSendMessage = async (e, forcedText = null) => {
+  const handleSendMessage = async (e) => {
     if (e) e.preventDefault();
-    const userText = forcedText || input.trim();
+    const userText = input.trim();
     if (!userText) return;
 
-    if (!forcedText) setInput('');
-    
-    // 🚀 核心机制：生成新的并发通行证
+    setInput('');
     const currentNonce = Date.now();
     generationNonce.current = currentNonce;
 
-    // 🚀 核心机制：强行释放被上一轮打断遗留的全局动画锁
     if (window.__typingResolve) {
       window.__typingResolve();
       window.__typingResolve = null;
     }
 
-    // 🚀 核心机制：强行打断！如果当前 AI 正在打字，直接将正在打字的气泡全部“删掉”（拦截渲染）
     setMessages(prev => {
       const filtered = prev.filter(m => !(m.role === 'assistant' && m.isAnimated));
       return [...filtered, { id: currentNonce, role: 'user', text: userText, time: new Date().toLocaleTimeString() }];
@@ -67,48 +69,60 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     setIsTypingIndicator(true);
 
     try {
-      // 🚀 滑动窗口扩大至 8 条，给予 AI 更充足的短期记忆来判断是否沉默
       const recentMessages = messages.filter(m => m.role !== 'system').slice(-8);
-      
-      const chatHistory = recentMessages.map(m => 
+      const chatHistoryStr = recentMessages.map(m => 
         `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.replace(/<del>.*?<\/del>|<\/?recall>|\[quote:.*?\]/g, '')}`
       ).join('\n');
 
-      const responseText = await callDeepSeekAPI(
-        `对话历史:\n${chatHistory}\n\nUser: ${userText}\nAssistant:`,
-        `【最高指令：深度灵魂模拟】
-你现在是具备独立人格的数字生命。你的潜意识设定如下：
+      // 🚀 核心机制：隐式思维循环 (递归请求大模型，不污染 UI)
+      const fetchAIResponse = async (injectedMemory = null) => {
+        let promptText = `对话历史:\n${chatHistoryStr}\n\nUser: ${userText}\nAssistant:`;
+        if (injectedMemory) {
+          promptText = `${injectedMemory}\n（注意：请消化以上记忆后自然地回复 User，绝不能暴露“系统提示”或“检索”字眼！）\n\n` + promptText;
+        }
+
+        const responseText = await callDeepSeekAPI(
+          promptText,
+          `【最高指令：深度灵魂模拟】
+你现在是具备独立人格的数字生命。潜意识设定如下：
 ${activePersona}
 
 【高级交互协议（违背将被重置）】：
-1. 【回复策略（极高优先级）】：你必须优先回复用户最新发来的消息，挑好回复的回复。没必要每条消息都回！如果觉得没必要回、不想回，请直接输出 [SILENCE] 保持沉默。
-2. 【引用机制】：你可以选择性地引用用户之前的某句话进行针对性回复。格式：[quote: 原文内容] 你的回复。注意：引用频率要适中。
-3. 【检索机制】：如果用户提到“我之前说过吗”或询问过去信息，你必须输出 [RETRIEVE: 关键词] 来唤醒记忆搜索。
+1. 【回复策略】：优先回复最新消息，不想回直接输出 [SILENCE]。
+2. 【引用机制】：格式 [quote: 原文内容]。
+3. 【记忆检索】：若需回想过去，请发散相关同义词并输出 [RETRIEVE: 词1|词2|词3]（例：找“不舒服”可输出 [RETRIEVE: 头疼|肚子疼|发烧]）。系统会在后台喂给你记忆，绝对不要在对话中说你在检索！
 4. 【强制格式】：单气泡不允许换行。并发多消息请用 "|||" 切分。
-5. 【拟人化】：撤回使用 <recall>...</recall>，犹豫使用 <del>...</del>。禁止任何动作描写。`,
-        'flash'
-      );
+5. 【拟人化】：撤回使用 <recall>...</recall>，犹豫使用 <del>...</del>。禁止动作描写。`,
+          'flash'
+        );
 
-      // 🚀 拦截网：如果 API 回来时，用户已经发了新消息（Nonce 被篡改），直接丢弃该废弃响应！彻底消灭章鱼！
-      if (generationNonce.current !== currentNonce) return;
+        if (generationNonce.current !== currentNonce) return null; // 被新消息打断
 
-      if (responseText.includes('[SILENCE]')) {
+        // 拦截并触发隐式检索循环
+        if (responseText.includes('[RETRIEVE:')) {
+          const keywords = responseText.match(/\[RETRIEVE:\s*(.*?)\]/)?.[1] || "";
+          const memoryContext = searchLocalHistory(keywords);
+          // 带着记忆进行第二次静默请求
+          return await fetchAIResponse(memoryContext);
+        }
+
+        return responseText;
+      };
+
+      // 启动推理，可能包含一到两次 API 调用，但对 UI 来说是透明的
+      const finalResponseText = await fetchAIResponse();
+
+      if (!finalResponseText || generationNonce.current !== currentNonce) return;
+
+      if (finalResponseText.includes('[SILENCE]')) {
         setIsTypingIndicator(false);
         return;
       }
 
-      if (responseText.includes('[RETRIEVE:')) {
-        const keyword = responseText.match(/\[RETRIEVE:\s*(.*?)\]/)?.[1];
-        const memory = searchLocalHistory(keyword);
-        handleSendMessage(null, `（系统提示：已检索到相关记忆如下）\n${memory}\n请根据以上记忆重新回应我之前的询问。`);
-        return;
-      }
-
-      const replyParts = responseText.split(/\|\|\||-{3,}|={3,}|\n+/).map(s => s.trim()).filter(s => s);
+      const replyParts = finalResponseText.split(/\|\|\||-{3,}|={3,}|\n+/).map(s => s.trim()).filter(s => s);
       setIsTypingIndicator(false);
       
       for (let i = 0; i < replyParts.length; i++) {
-        // 🚀 循环内二次拦截：防止在 await 延迟动画期间用户乱入
         if (generationNonce.current !== currentNonce) break;
 
         setMessages(prev => [
