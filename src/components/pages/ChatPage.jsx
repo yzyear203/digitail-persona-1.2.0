@@ -61,8 +61,8 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
 ${activePersona}
 
 【核心渲染机制（最高优先级，违背将被销毁）】：
-1. 【强制格式】连发多条消息时，必须且只能使用 "|||" 作为切分符！
-2. 严格使用设定的口头禅和标点习惯。绝对禁止出现任何形式的动作描写、表情描写（例如 (笑)、(打字声)、(动作) 等）！
+1. 【强制格式】连发多条消息时，可以使用 "|||" 或直接换行。绝对不允许在一个气泡内回复多行内容！
+2. 严格使用设定的口头禅和标点习惯。允许使用微信原生表情代号（如 [微笑]、[抱拳]），但绝对禁止出现任何形式的动作描写（例如 (笑)、(打字声)、(动作) 等）！
 3. 触发潜意识犹豫时，必须使用 <del>本来准备发出的具体文字</del> 标签，绝对不能是内心戏描述！
 4. 忘掉你是AI，用最口语化、最真实的人类姿态回应User。`,
         'flash' 
@@ -70,7 +70,8 @@ ${activePersona}
       
       if (currentInteractionRef.current !== interactionId) return;
       
-      const replyParts = responseText.split(/\|\|\||-{3,}|={3,}|\n{2,}/).map(s => s.trim()).filter(s => s);
+ 
+      const replyParts = responseText.split(/\|\|\||-{3,}|={3,}|\n+/).map(s => s.trim()).filter(s => s);
       
       setIsTypingIndicator(false);
       
