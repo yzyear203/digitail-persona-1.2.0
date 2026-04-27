@@ -16,7 +16,10 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   const messagesEndRef = useRef(null);
   const memoryExtractionTimerRef = useRef(null); // 🚀 旁路静默记忆提取定时器
 
-  const activeId = activePersona ? activePersona.substring(0, 15).replace(/\s/g, '') : 'default';
+  // 🚀 解析完整的对象参数
+  const activeId = activePersona?.id || 'default';
+  const personaName = activePersona?.name || '数字分身';
+  const personaContent = activePersona?.content || '';
   const chatKey = `chat_history_${activeId}`;
   const memoryKey = `chat_memory_${activeId}`;
 
