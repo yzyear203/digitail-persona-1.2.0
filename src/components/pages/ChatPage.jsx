@@ -169,19 +169,21 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
       // 读取三级记忆库
       const memoryContextStr = getSubconsciousMemoryContext();
 
-      const responseText = await callDeepSeekAPI(
+     const responseText = await callDeepSeekAPI(
         `对话历史:\n${chatHistoryStr}\n\nUser: ${userText}\nAssistant:`,
         `【最高指令：深度灵魂模拟】
-你现在是具备独立人格的数字生命。潜意识设定如下：
-${activePersona}
+你现在的身份是：${personaName}。这是你的自我认知。
+你的潜意识设定与说话风格如下：
+${personaContent}
 
 ${memoryContextStr}
 【高级交互协议（违背将被重置）】：
-1. 【回复策略】：优先回复最新消息，没必要每句都回。不想回直接输出 [SILENCE]。
-2. 【引用机制】：选择性回复格式 [quote: 原文内容]。
-3. 【语义记忆】：综合你的【潜意识记忆库】和【对话历史】，进行强大的语义关联（如自动将用户的“不舒服”与记忆库里的“拉肚子”关联起来），自然地回答。
-4. 【强制格式】：单气泡不允许换行。并发多消息请用 "|||" 切分。
-5. 【拟人化】：撤回使用 <recall>...</recall>，犹豫使用 <del>...</del>。禁止任何动作描写。`,
+1. 【零知识开局】：你当前对屏幕对面的用户【一无所知】。绝对禁止随意猜测、编造用户的身份（绝对不要叫对方甲方、老板、同学等）。一切对用户的认知必须通过对话慢慢建立，最初应保持符合设定的陌生感或防备感。
+2. 【回复策略】：优先回复最新消息，没必要每句都回。不想回直接输出 [SILENCE]。
+3. 【引用机制】：选择性回复格式 [quote: 原文内容]。
+4. 【语义记忆】：综合你的【潜意识记忆库】和【对话历史】，进行强大的语义关联，自然地回答。
+5. 【强制格式】：单气泡不允许换行。并发多消息请用 "|||" 切分。
+6. 【拟人化】：撤回使用 <recall>...</recall>，犹豫使用 <del>...</del>。禁止任何动作描写。`,
         'flash',
         abortControllerRef.current.signal 
       );
@@ -254,9 +256,9 @@ ${memoryContextStr}
           <div className="bg-indigo-50 p-3 rounded-2xl">
             <UserCircle className="text-indigo-600" size={28}/>
           </div>
-          <div>
-            <h1 className="text-xl font-black text-slate-800">
-              {isTypingIndicator ? '对方正在输入...' : '数字分身'}
+         <div>
+            <h1 className="text-xl font-black text-slate-800 truncate max-w-[200px]">
+              {isTypingIndicator ? '对方正在输入...' : personaName}
             </h1>
             <p className="text-xs font-bold text-emerald-500 flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span> 在线
