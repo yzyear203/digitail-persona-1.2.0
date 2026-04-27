@@ -48,12 +48,46 @@ export default function App() {
     }
   };
 
-  // 监听用户登录状态，登录成功后自动拉取列表
+ // 监听用户登录状态，登录成功后自动拉取列表
   useEffect(() => {
     if (authProps.user) {
       fetchSavedPersonas();
     }
   }, [authProps.user]);
+
+  // 🚀 核心新增：监听 URL 裂变参数，实现一键穿透拉起
+  useEffect(() => {
+    const checkShareLink = async () => {
+      const params = new URLSearchParams(window.location.search);
+      const shareId = params.get('shareId');
+      
+      if (shareId && db) {
+        try {
+          showMsg('✨ 嗅探到灵魂链路，正在唤醒分身...');
+          
+          // 机制突破：如果好友未登录，强行静默触发游客登录以获取数据库访问 Token
+          if (!authProps.user) {
+            const { auth } = await import('./lib/cloudbase');
+            await auth.anonymousAuthProvider().signIn();
+          }
+          
+          // 根据链接 ID 拉取公有资产
+          const res = await db.collection('personas').doc(shareId).get();
+          if (res.data && res.data.length > 0) {
+            const sharedPersona = res.data[0];
+            loadPersonaAndChat(sharedPersona);
+            // 唤醒成功后，静默清除 URL 上的小尾巴，保持地址栏纯净
+            window.history.replaceState({}, document.title, window.location.pathname);
+          } else {
+            showMsg('❌ 该数字资产已销毁或设置了私密');
+          }
+        } catch (error) {
+          showMsg('❌ 唤醒失败，请检查 TCB 数据库是否已设置为“公有读”');
+        }
+      }
+    };
+    checkShareLink();
+  }, [db, authProps.user]);
 
   // 如果云开发初始化失败，直接拦截到白屏急救页
   if (sdkInitError) {
