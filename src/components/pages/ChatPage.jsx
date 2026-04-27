@@ -14,10 +14,8 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   const currentInteractionRef = useRef(0);
   const messagesEndRef = useRef(null);
 
-  // 🚀 新增：生成当前分身的唯一本地缓存 Key
   const chatKey = `chat_history_${activePersona ? activePersona.substring(0, 15).replace(/\s/g, '') : 'default'}`;
 
-  // 🚀 新增：初始化时从 LocalStorage 加载聊天记录
   useEffect(() => {
     if (messages.length === 1 && messages[0].role === 'system') {
       const savedHistory = localStorage.getItem(chatKey);
@@ -25,16 +23,14 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
         setMessages(JSON.parse(savedHistory));
       }
     }
-  }, [chatKey]); // 仅在加载新人格时触发
+  }, [chatKey]); 
 
-  // 🚀 新增：消息变动时自动写入 LocalStorage
   useEffect(() => {
-    if (messages.length > 1) { // 超过 1 条（即除了系统提示词还有其他对话）才保存
+    if (messages.length > 1) { 
       localStorage.setItem(chatKey, JSON.stringify(messages));
     }
   }, [messages, chatKey]);
 
-  // 自动滚动到底部
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, isTypingIndicator]);
 
   const handleSendMessage = async (e) => {
@@ -52,13 +48,11 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     setMessages(prev => [...prev, { id: interactionId, role: 'user', text: userText, time: new Date().toLocaleTimeString() }]);
 
     try {
-      // 🚀 补丁：滑动窗口截断，只取最后 12 条对话发送给大模型，防止记忆稀释导致人设崩塌
       const recentMessages = messages.filter(m => m.role !== 'system').slice(-12);
       const chatHistory = recentMessages.map(m => 
         `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.replace(/<del>.*?<\/del>/g, '')}`
       ).join('\n');
 
-      // 👑 体验升维：挂载极速版 DeepSeek V4 Flash 引擎
       const responseText = await callDeepSeekAPI(
         `对话历史:\n${chatHistory}\n\nUser: ${userText}\nAssistant:`,
         `【最高指令：彻底代入】
@@ -68,18 +62,14 @@ ${activePersona}
 
 【核心渲染机制（最高优先级，违背将被销毁）】：
 1. 【强制格式】连发多条消息时，必须且只能使用 "|||" 作为切分符！
-   - 错误示范：我生气了 ---- 你看着办
-   - 正确示范：我生气了|||你看着办
-   - 绝对禁止使用 "----"、"===" 或换行符来代替 "|||"！
-2. 严格使用设定的口头禅和标点习惯。
-3. 触发潜意识犹豫时，必须使用 <del>被删掉的真实想法</del> 标签。
+2. 严格使用设定的口头禅和标点习惯。绝对禁止出现任何形式的动作描写、表情描写（例如 (笑)、(打字声)、(动作) 等）！
+3. 触发潜意识犹豫时，必须使用 <del>本来准备发出的具体文字</del> 标签，绝对不能是内心戏描述！
 4. 忘掉你是AI，用最口语化、最真实的人类姿态回应User。`,
         'flash' 
       );
       
       if (currentInteractionRef.current !== interactionId) return;
       
-      // 🚀 补丁：防御性正则切分，兼容大模型自行发明的 ---- 或换行符，防止超长消息无法切分
       const replyParts = responseText.split(/\|\|\||-{3,}|={3,}|\n{2,}/).map(s => s.trim()).filter(s => s);
       
       setIsTypingIndicator(false);
@@ -113,9 +103,7 @@ ${activePersona}
   const handleExtractTasks = async () => {
     setIsExtracting(true);
     try {
-      // 🧹 清理了这里原本错误的滑动窗口覆盖声明，恢复纯净的提取逻辑
       const chatHistory = messages.filter(m => m.role !== 'system').map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.replace(/<del>.*?<\/del>/g, '')}`).join('\n');
-      
       const jsonResponse = await callDoubaoAPI(`分析对话，提取所有代办事项，没有返回空数组。\n\n${chatHistory}`, '严格输出 JSON 字符串数组，例如：["联系张三", "发送邮件"]。');
       let tasks = [];
       try { tasks = JSON.parse(jsonResponse.replace(/```json|```/g, '').trim()); } catch (e) {}
@@ -134,7 +122,10 @@ ${activePersona}
         <div className="flex items-center gap-4">
           <div className="bg-indigo-50 p-3 rounded-2xl"><UserCircle className="text-indigo-600" size={28}/></div>
           <div>
-            <h1 className="text-xl font-black text-slate-800">数字分身</h1>
+            {/* 视觉重构：大字号置顶显示“对方正在输入” */}
+            <h1 className="text-xl font-black text-slate-800">
+              {isTypingIndicator ? '对方正在输入...' : '数字分身'}
+            </h1>
             <p className="text-xs font-bold text-emerald-500 flex items-center gap-1.5"><span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span> 在线</p>
           </div>
         </div>
@@ -145,30 +136,49 @@ ${activePersona}
           <button onClick={() => setAppPhase('dashboard')} className="px-5 py-2.5 bg-slate-50 text-slate-600 rounded-xl font-black text-sm hover:bg-slate-100 transition-all">返回大厅</button>
         </div>
       </header>
-      <main className="flex-1 overflow-y-auto p-8 space-y-6">
-        {messages.map(m => {
+      <main className="flex-1 overflow-y-auto p-8">
+        {messages.map((m, index) => {
           if (m.role === 'system') return null;
 
           const strippedText = m.text.replace(/<del>.*?<\/del>/g, '').trim();
+          
+          // 逻辑重构：判断时间间隔（大于 5 分钟 = 300000毫秒 则显示）
+          let showTime = false;
+          const prevMsg = messages.slice(0, index).reverse().find(msg => msg.role !== 'system');
+          if (!prevMsg || m.id - prevMsg.id > 300000) {
+            showTime = true;
+          }
+          
+          const timeDisplay = new Date(m.id).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
           return (
-            <div key={m.id} className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
-              <div className={`max-w-[75%] px-6 py-4 rounded-3xl shadow-sm text-[15px] font-medium leading-relaxed ${m.role === 'user' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white text-slate-800 border border-slate-200 rounded-bl-none'}`}>
-                {m.role === 'assistant' && m.isAnimated
-                  ? <TypingText content={m.text} persona={activePersona} scrollRef={messagesEndRef} onComplete={() => setMessages(p => p.map(msg => msg.id === m.id ? { ...msg, isAnimated: false } : msg))} />
-                  // 🚀 补丁：给静态文本也加上 whitespace-pre-wrap 防止空行被 CSS 吞噬塌陷
-                  : (strippedText ? <span className="whitespace-pre-wrap">{strippedText}</span> : <span className="italic text-slate-400 text-sm">（撤回了一条消息）</span>)}
-                <span className={`block text-[10px] mt-2 font-black opacity-50 ${m.role === 'user' ? 'text-indigo-100' : 'text-slate-400'}`}>{m.time}</span>
-              </div>
-            </div>
+            <React.Fragment key={m.id}>
+              {/* 微信同款：居中时间戳 */}
+              {showTime && (
+                <div className="flex justify-center my-5">
+                  <span className="text-xs text-slate-400 font-medium">{timeDisplay}</span>
+                </div>
+              )}
+              
+              {/* 微信同款：居中撤回消息提示 */}
+              {!strippedText && m.role === 'assistant' ? (
+                <div className="flex justify-center my-4">
+                  <span className="text-xs text-slate-500 font-medium bg-slate-200/60 px-3 py-1 rounded-md">
+                    "对方" 撤回了一条消息
+                  </span>
+                </div>
+              ) : (
+                <div className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'} mb-6`}>
+                  <div className={`max-w-[75%] px-6 py-4 rounded-3xl shadow-sm text-[15px] font-medium leading-relaxed ${m.role === 'user' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white text-slate-800 border border-slate-200 rounded-bl-none'}`}>
+                    {m.role === 'assistant' && m.isAnimated
+                      ? <TypingText content={m.text} persona={activePersona} scrollRef={messagesEndRef} onComplete={() => setMessages(p => p.map(msg => msg.id === m.id ? { ...msg, isAnimated: false } : msg))} />
+                      : <span className="whitespace-pre-wrap">{strippedText}</span>}
+                  </div>
+                </div>
+              )}
+            </React.Fragment>
           );
         })}
-        {isTypingIndicator && (
-          <div className="flex gap-2 p-4 bg-white rounded-2xl w-fit">
-            <div className="w-2 h-2 bg-slate-300 rounded-full animate-bounce"></div>
-            <div className="w-2 h-2 bg-slate-300 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
-            <div className="w-2 h-2 bg-slate-300 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></div>
-          </div>
-        )}
         <div ref={messagesEndRef} className="h-4"/>
       </main>
       <footer className="bg-white border-t border-slate-200 p-6">
