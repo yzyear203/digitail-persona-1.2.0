@@ -70,47 +70,47 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
         
         let newMemory = { transient_states: [], recent_events: [], core_traits: [] };
         
-        // 🚨 注入观测点 1：排查 JSON 解析是否因为模型输出脏数据而失败
+        // 🚀 修复点 1：防止 JSON 脏数据导致崩溃并静默退出
         try { 
           newMemory = JSON.parse(resJSONStr.replace(/```json|```/g, '').trim()); 
         } catch (e) { 
-          console.error("❌ [提炼阻断] JSON解析失败, 原始大模型返回:", resJSONStr, e); 
+          console.error("❌ [提炼阻断] JSON解析失败，AI未返回标准格式", resJSONStr);
           return; 
         }
 
         // 提取出所有有效文本
         const memoryItems = [
-          ...newMemory.transient_states,
-          ...newMemory.recent_events,
-          ...newMemory.core_traits
+          ...(newMemory.transient_states || []),
+          ...(newMemory.recent_events || []),
+          ...(newMemory.core_traits || [])
         ];
 
         if (memoryItems.length > 0) {
-          // 🚨 注入观测点 2：确认是否走到了呼叫云函数这一步
-          console.log("🚀 [提炼成功] 准备呼叫云函数 vectorize_memory, payload:", { personaId: activeId, memories: memoryItems });
-          
-          // 🚀 V2.0 升级：直接呼叫云函数，将新记忆送入 TCB 向量库进行 Embedding
+          console.log("🚀 [触发刻录] 准备写入记忆库:", memoryItems);
+          // 🚀 修复点 2：增加日志，确认是否成功呼叫云函数
           const { cloudbase } = await import('../../lib/cloudbase');
-          await cloudbase.callFunction({
+          const res = await cloudbase.callFunction({
             name: 'vectorize_memory',
             data: { 
               personaId: activeId,
               memories: memoryItems
             }
           });
-          console.log("🧠 增量记忆已成功推流至云端向量库！");
+          
+          if(res.result?.success) {
+            console.log("🧠 增量记忆已成功推流至云端向量库！");
+          } else {
+            console.error("❌ 云函数刻录返回失败:", res.result?.error);
+          }
         }
       } catch (error) {
-        // 🚨 注入观测点 3：排查云端调用是否崩溃
-        console.error("🚨 [致命中断] 旁路记忆流转失败，云函数报错或网络异常:", error);
+        console.error("🚨 [致命中断] 旁路记忆提取链路异常:", error);
       }
     }, 10000); 
 
     return () => clearTimeout(memoryExtractionTimerRef.current);
   }, [messages, memoryKey]);
 
-  // 🚀 读取有效记忆并格式化为潜意识 Prompt
-  // 🚀 原本地记忆读取机制已彻底粉碎，交由云端 Tool Calls 自主接管
   // 留空以兼容上下文变量引用
   const getSubconsciousMemoryContext = () => "";
   
@@ -168,7 +168,7 @@ ${personaContent}
 6. 【拟人化】：撤回使用 <recall>...</recall>，犹豫使用 <del>...</del>。禁止任何动作描写。`,
         'flash',
         abortControllerRef.current.signal,
-        activeId // 🚀 补上这最后一行！这是第五个参数，把当前身份的 ID 传进去
+        activeId // 🚀 确保把 ID 传进去
       );
 
       if (generationNonce.current !== currentNonce) return;
@@ -265,6 +265,7 @@ ${personaContent}
         </div>
       </header>
 
+      {/* 原封不动保留你所有的 UI 渲染细节 */}
       <main className="flex-1 overflow-y-auto p-8">
         {messages.map((m, index) => {
           if (m.role === 'system') return null;
