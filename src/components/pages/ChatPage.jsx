@@ -3,7 +3,7 @@ import ChatHeader from '../chat/ChatHeader';
 import ChatMessageList from '../chat/ChatMessageList';
 import ChatInput from '../chat/ChatInput';
 import TasksModal from '../ui/TasksModal';
-import MemoryCabin from '../ui/MemoryCabin'; // 👑 引入新舱体
+import MemoryCabin from '../ui/MemoryCabin';
 import { callDoubaoAPI, callDeepSeekAPI } from '../../lib/api';
 import { hasContentSignal, getHotT1, saveToHotT1Cache, buildSystemPrompt, applyBudgetAllocator } from '../../lib/dsm'; 
 
@@ -11,16 +11,19 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   const [input, setInput] = useState('');
   const [isTypingIndicator, setIsTypingIndicator] = useState(false);
   const [showTasksModal, setShowTasksModal] = useState(false);
-  const [showMemoryCabin, setShowMemoryCabin] = useState(false); // 👑 透明舱开关
+  const [showMemoryCabin, setShowMemoryCabin] = useState(false);
   const [extractedTasks, setExtractedTasks] = useState([]);
   const [isExtracting, setIsExtracting] = useState(false);
   
   const generationNonce = useRef(0);
-// ...
+  const abortControllerRef = useRef(null); 
+  const messagesEndRef = useRef(null);
+  const extractTimerRef = useRef(null); 
+
   const activeId = activePersona?.id || 'default';
   const chatKey = `chat_history_${activeId}`;
 
-  // 👑 计算冷却期与回归天数
+  // 计算冷却期与回归天数
   let daysSinceLastChat = 0;
   let isCooling = false;
   try {
@@ -31,7 +34,6 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     if (t3.relationship?.bond_momentum === 'cooling') isCooling = true;
   } catch(e) {}
 
-  // 1. 初始化与持久化
   useEffect(() => {
     if (messages.length === 1 && messages[0].role === 'system') {
       const savedHistory = localStorage.getItem(chatKey);
@@ -47,9 +49,6 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); 
   }, [messages, isTypingIndicator]);
 
-  // ==========================================
-  // ⚡ DSM 引擎：机制①守门人 + 机制⑤闪电通道
-  // ==========================================
   useEffect(() => {
     if (isTypingIndicator) return;
     
@@ -84,15 +83,12 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
         try { t1Event = JSON.parse(resJSONStr.replace(/```json|```/g, '').trim()); } catch (e) { return; }
 
        if (t1Event.importance > 0 && t1Event.summary) {
-          // A. 写入前端 localStorage 热态缓存
           saveToHotT1Cache(activeId, t1Event.summary);
           
           const { cloudbase } = await import('../../lib/cloudbase');
 
-          // B. 【新增】蓝图机制⑤：闪电通道更新 T3 核心状态
           if (t1Event.importance >= 8) {
             showMsg(`⚡ 闪电更新：已感知到重大事件 [${t1Event.summary}]`);
-            // 👑 前端静默同步 T3 状态
             setActivePersona(prev => {
               try {
                 const t3 = JSON.parse(prev.content);
@@ -106,7 +102,6 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
             });
           }
 
-          // C. 同步给云端向量库（T2 储备）
           await cloudbase.callFunction({
             name: 'vectorize_memory',
             data: { personaId: activeId, memories: [t1Event.summary] }
@@ -120,10 +115,6 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     return () => clearTimeout(extractTimerRef.current);
   }, [messages, isTypingIndicator, activeId]);
 
-  
-  // ==========================================
-  // 💬 发送中枢：机制③ 动态预算与 System Prompt 直注
-  // ==========================================
   const handleSendMessage = async (e) => {
     if (e) e.preventDefault();
     const userText = input.trim();
@@ -151,7 +142,6 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
 
     try {
       const hotT1 = getHotT1(activeId);
-      // 👑 传入真实计算的冷却与回归参数
       const sysPrompt = buildSystemPrompt(activePersona, hotT1, isCooling, daysSinceLastChat);
       const allT0 = [...messages.filter(m => m.role !== 'system'), { role: 'user', text: userText }];
       const sysPromptLength = Math.ceil(sysPrompt.length / 1.5); 
@@ -226,9 +216,16 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
         isExtracting={isExtracting} 
         handleExtractTasks={handleExtractTasks} 
         setAppPhase={setAppPhase} 
-        setShowMemoryCabin={setShowMemoryCabin} // 👑 传入回调
+        setShowMemoryCabin={setShowMemoryCabin} 
       />
-// ...
+      
+      <ChatMessageList 
+        messages={messages} 
+        setMessages={setMessages} 
+        activePersona={activePersona} 
+        messagesEndRef={messagesEndRef} 
+      />
+      
       <ChatInput 
         input={input} 
         setInput={setInput} 
@@ -236,7 +233,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
       />
       
       {showTasksModal && <TasksModal tasks={extractedTasks} onClose={() => setShowTasksModal(false)} />}
-      {/* 👑 渲染记忆透明舱 */}
       {showMemoryCabin && <MemoryCabin activePersona={activePersona} onClose={() => setShowMemoryCabin(false)} />}
     </div>
   );
+}
