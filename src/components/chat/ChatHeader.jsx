@@ -1,12 +1,13 @@
 import React from 'react';
-import { UserCircle, Sparkles, Loader2 } from 'lucide-react';
+import { UserCircle, Sparkles, Loader2, BrainCircuit } from 'lucide-react'; // 👑 引入图标
 
 export default function ChatHeader({ 
   activePersona, 
   isTypingIndicator, 
   isExtracting, 
   handleExtractTasks, 
-  setAppPhase 
+  setAppPhase,
+  setShowMemoryCabin // 👑 接收开关状态
 }) {
   const personaName = activePersona?.name || '数字分身';
 
@@ -26,6 +27,14 @@ export default function ChatHeader({
         </div>
       </div>
       <div className="flex gap-4">
+        {/* 👑 记忆透明舱呼出按钮 */}
+        <button 
+          onClick={() => setShowMemoryCabin(true)} 
+          className="px-5 py-2.5 bg-purple-50 text-purple-600 rounded-xl font-black text-sm hover:bg-purple-100 transition-all flex items-center gap-2"
+        >
+          <BrainCircuit size={16}/> T3 记忆舱
+        </button>
+
         <button 
           onClick={handleExtractTasks} 
           disabled={isExtracting} 
