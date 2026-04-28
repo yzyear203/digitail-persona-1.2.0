@@ -3,23 +3,33 @@ import ChatHeader from '../chat/ChatHeader';
 import ChatMessageList from '../chat/ChatMessageList';
 import ChatInput from '../chat/ChatInput';
 import TasksModal from '../ui/TasksModal';
+import MemoryCabin from '../ui/MemoryCabin'; // 👑 引入新舱体
 import { callDoubaoAPI, callDeepSeekAPI } from '../../lib/api';
 import { hasContentSignal, getHotT1, saveToHotT1Cache, buildSystemPrompt, applyBudgetAllocator } from '../../lib/dsm'; 
 
-export default function ChatPage({ setAppPhase, messages, setMessages, activePersona, showMsg }) {
+export default function ChatPage({ setAppPhase, messages, setMessages, activePersona, setActivePersona, showMsg }) {
   const [input, setInput] = useState('');
   const [isTypingIndicator, setIsTypingIndicator] = useState(false);
   const [showTasksModal, setShowTasksModal] = useState(false);
+  const [showMemoryCabin, setShowMemoryCabin] = useState(false); // 👑 透明舱开关
   const [extractedTasks, setExtractedTasks] = useState([]);
   const [isExtracting, setIsExtracting] = useState(false);
   
   const generationNonce = useRef(0);
-  const abortControllerRef = useRef(null); 
-  const messagesEndRef = useRef(null);
-  const extractTimerRef = useRef(null); 
-
+// ...
   const activeId = activePersona?.id || 'default';
   const chatKey = `chat_history_${activeId}`;
+
+  // 👑 计算冷却期与回归天数
+  let daysSinceLastChat = 0;
+  let isCooling = false;
+  try {
+    const t3 = JSON.parse(activePersona?.content || '{}');
+    if (t3.relationship?.last_chat_time) {
+      daysSinceLastChat = Math.floor((Date.now() - new Date(t3.relationship.last_chat_time).getTime()) / (1000 * 3600 * 24));
+    }
+    if (t3.relationship?.bond_momentum === 'cooling') isCooling = true;
+  } catch(e) {}
 
   // 1. 初始化与持久化
   useEffect(() => {
@@ -82,6 +92,14 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
           // B. 【新增】蓝图机制⑤：闪电通道更新 T3 核心状态
           if (t1Event.importance >= 8) {
             showMsg(`⚡ 闪电更新：已感知到重大事件 [${t1Event.summary}]`);
+            // 👑 前端静默同步 T3 状态
+            setActivePersona(prev => {
+              try {
+                const t3 = JSON.parse(prev.content);
+                t3.current_context = { value: t1Event.summary, expires_at: new Date(Date.now() + 7*24*3600*1000).toISOString() };
+                return { ...prev, content: JSON.stringify(t3) };
+              } catch(e) { return prev; }
+            });
             await cloudbase.callFunction({
               name: 'update_t3_context',
               data: { personaId: activeId, currentContext: t1Event.summary }
@@ -133,8 +151,8 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
 
     try {
       const hotT1 = getHotT1(activeId);
-      const sysPrompt = buildSystemPrompt(activePersona, hotT1, false, 0);
-
+      // 👑 传入真实计算的冷却与回归参数
+      const sysPrompt = buildSystemPrompt(activePersona, hotT1, isCooling, daysSinceLastChat);
       const allT0 = [...messages.filter(m => m.role !== 'system'), { role: 'user', text: userText }];
       const sysPromptLength = Math.ceil(sysPrompt.length / 1.5); 
       const prunedT0 = applyBudgetAllocator(allT0, sysPromptLength, 3000);
@@ -208,15 +226,9 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
         isExtracting={isExtracting} 
         handleExtractTasks={handleExtractTasks} 
         setAppPhase={setAppPhase} 
+        setShowMemoryCabin={setShowMemoryCabin} // 👑 传入回调
       />
-      
-      <ChatMessageList 
-        messages={messages} 
-        setMessages={setMessages} 
-        activePersona={activePersona} 
-        messagesEndRef={messagesEndRef} 
-      />
-      
+// ...
       <ChatInput 
         input={input} 
         setInput={setInput} 
@@ -224,6 +236,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
       />
       
       {showTasksModal && <TasksModal tasks={extractedTasks} onClose={() => setShowTasksModal(false)} />}
+      {/* 👑 渲染记忆透明舱 */}
+      {showMemoryCabin && <MemoryCabin activePersona={activePersona} onClose={() => setShowMemoryCabin(false)} />}
     </div>
   );
-}
