@@ -14,7 +14,10 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   const generationNonce = useRef(0);
   const abortControllerRef = useRef(null); 
   const messagesEndRef = useRef(null);
-  const memoryExtractionTimerRef = useRef(null); // 🚀 旁路静默记忆提取定时器
+  const memoryExtractionTimerRef = useRef(null); 
+  
+  // 🚀 核心修复：引入记忆游标，绝不重复提炼历史聊天
+  const lastExtractedIndex = useRef(1);
 
   // 🚀 解析完整的对象参数
   const activeId = activePersona?.id || 'default';
@@ -27,7 +30,12 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   useEffect(() => {
     if (messages.length === 1 && messages[0].role === 'system') {
       const savedHistory = localStorage.getItem(chatKey);
-      if (savedHistory) setMessages(JSON.parse(savedHistory));
+      if (savedHistory) {
+        const parsedHistory = JSON.parse(savedHistory);
+        setMessages(parsedHistory);
+        // 加载历史后，游标直接指向末尾，防重复
+        lastExtractedIndex.current = parsedHistory.length; 
+      }
     }
   }, [chatKey]);
 
@@ -41,77 +49,67 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   // 自动滚动到底部
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, isTypingIndicator]);
 
-  // 🚀 核心重构：三级记忆引擎 - 旁路静默提炼与持久化存储
+  // 🚀 核心重构：防重复的高质量记忆提炼引擎
   useEffect(() => {
-    if (messages.length < 3) return; // 聊天数据太少时不触发
+    // 提取还未被处理的新消息
+    const unextractedMessages = messages.slice(lastExtractedIndex.current);
     
-    // 防抖：用户连续聊天时不提取，停顿 10 秒后触发静默整理
+    // 阀门：只有积攒了至少 2 句用户的新发言，才触发提炼（防止太频繁）
+    if (unextractedMessages.filter(m => m.role === 'user').length < 2) return; 
+    
     if (memoryExtractionTimerRef.current) clearTimeout(memoryExtractionTimerRef.current);
     
     memoryExtractionTimerRef.current = setTimeout(async () => {
+      // 锁定游标，防止异步期间重复触发
+      lastExtractedIndex.current = messages.length;
+
       try {
-        const historyForExtraction = messages
+        const historyForExtraction = unextractedMessages
           .filter(m => m.role !== 'system')
-          .slice(-15) // 取最近 15 条供大模型提炼
           .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.replace(/<del>.*?<\/del>|<\/?recall>|\[quote:.*?\]/g, '')}`)
           .join('\n');
 
-        const prompt = `分析以下对话，提取 User(用户) 和 Assistant(分身/你) 双方透露的最新增量记忆。请务必在每条记忆前标明主语（例如：[用户] 或 [分身]）。严格按下方JSON格式输出（必须纯JSON，无Markdown）：
+        // 🚀 强化 Prompt：明确拒绝垃圾信息，只要硬核事实！
+        const prompt = `分析以下【最新】的对话记录，提取极具价值的【增量记忆】。
+严禁提取无意义的日常。必须提取具体的【实体信息】：
+1. 用户的姓名、身份、职业
+2. 明确的计划、地点（如：打算去华山旅游、去哪吃饭）
+3. 明确的喜好或讨厌的事物
+请务必在每条记忆前标明主语（例如：[用户]准备五一去爬华山）。严格按下方JSON输出：
 {
-  "transient_states": ["双方身体/情绪/当前状态，如'[用户]今天拉肚子了', '[分身]感觉有点累'"],
-  "recent_events": ["双方近期发生的事情，如'[用户]刚吃完火锅', '[分身]刚才去开会了'"],
-  "core_traits": ["双方深层性格/身份/设定，如'[用户]喜欢存在主义', '[分身]是一个嘴硬心软的人'"]
+  "recent_events": ["提取的重要事件/计划/实体"],
+  "core_traits": ["提取的深层设定/身份/名字"]
 }
-如果没有任何新信息，对应的数组留空即可。
+如果没有硬核信息，对应的数组留空！
 对话记录：\n${historyForExtraction}`;
 
-        // 使用 Flash 模型快速处理后台任务，无需 signal，因为它不应该被用户打字阻断
-        const resJSONStr = await callDeepSeekAPI(prompt, "你是一个极简的信息提取机，只输出合法JSON。", "flash", null);
+        const resJSONStr = await callDeepSeekAPI(prompt, "你是一个只输出合法JSON的信息提取机。", "flash", null);
         
-        let newMemory = { transient_states: [], recent_events: [], core_traits: [] };
-        
-        // 🚀 修复点 1：防止 JSON 脏数据导致崩溃并静默退出
+        let newMemory = { recent_events: [], core_traits: [] };
         try { 
           newMemory = JSON.parse(resJSONStr.replace(/```json|```/g, '').trim()); 
-        } catch (e) { 
-          console.error("❌ [提炼阻断] JSON解析失败，AI未返回标准格式", resJSONStr);
-          return; 
-        }
+        } catch (e) { return; }
 
-        // 提取出所有有效文本
         const memoryItems = [
-          ...(newMemory.transient_states || []),
           ...(newMemory.recent_events || []),
           ...(newMemory.core_traits || [])
         ];
 
         if (memoryItems.length > 0) {
-          console.log("🚀 [触发刻录] 准备写入记忆库:", memoryItems);
-          // 🚀 修复点 2：增加日志，确认是否成功呼叫云函数
           const { cloudbase } = await import('../../lib/cloudbase');
-          const res = await cloudbase.callFunction({
+          await cloudbase.callFunction({
             name: 'vectorize_memory',
-            data: { 
-              personaId: activeId,
-              memories: memoryItems
-            }
+            data: { personaId: activeId, memories: memoryItems }
           });
-          
-          if(res.result?.success) {
-            console.log("🧠 增量记忆已成功推流至云端向量库！");
-          } else {
-            console.error("❌ 云函数刻录返回失败:", res.result?.error);
-          }
         }
       } catch (error) {
-        console.error("🚨 [致命中断] 旁路记忆提取链路异常:", error);
+        // 静默失败不打扰用户
       }
     }, 10000); 
 
     return () => clearTimeout(memoryExtractionTimerRef.current);
-  }, [messages, memoryKey]);
+  }, [messages, activeId]);
 
-  // 留空以兼容上下文变量引用
   const getSubconsciousMemoryContext = () => "";
   
   const handleSendMessage = async (e) => {
@@ -121,7 +119,6 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
 
     setInput('');
     
-    // 🛑 物理阻断机制
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
@@ -143,13 +140,11 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     setIsTypingIndicator(true);
 
     try {
-      // 🚀 恢复人类工作记忆机制：主窗口仅限最近 8 条交互！
       const recentMessages = messages.filter(m => m.role !== 'system').slice(-8);
       const chatHistoryStr = recentMessages.map(m => 
         `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.replace(/<del>.*?<\/del>|<\/?recall>|\[quote:.*?\]/g, '')}`
       ).join('\n');
 
-      // 读取三级记忆库
       const memoryContextStr = getSubconsciousMemoryContext();
 
      const responseText = await callDeepSeekAPI(
@@ -166,9 +161,9 @@ ${personaContent}
 4. 【引用机制】：选择性回复格式 [quote: 原文内容]。
 5. 【强制格式】：单气泡不允许换行。并发多消息请用 "|||" 切分。
 6. 【拟人化】：撤回使用 <recall>...</recall>，犹豫使用 <del>...</del>。禁止任何动作描写。`,
-        'flash',
+        'pro', // 强烈建议检索时使用 pro
         abortControllerRef.current.signal,
-        activeId // 🚀 确保把 ID 传进去
+        activeId 
       );
 
       if (generationNonce.current !== currentNonce) return;
@@ -265,7 +260,7 @@ ${personaContent}
         </div>
       </header>
 
-      {/* 原封不动保留你所有的 UI 渲染细节 */}
+      {/* 🚀 你的核心 UI，一字不差的保留了！ */}
       <main className="flex-1 overflow-y-auto p-8">
         {messages.map((m, index) => {
           if (m.role === 'system') return null;
