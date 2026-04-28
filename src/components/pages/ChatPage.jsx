@@ -73,11 +73,22 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
         let t1Event = { importance: 0, summary: "" };
         try { t1Event = JSON.parse(resJSONStr.replace(/```json|```/g, '').trim()); } catch (e) { return; }
 
-        if (t1Event.importance > 0 && t1Event.summary) {
+       if (t1Event.importance > 0 && t1Event.summary) {
+          // A. 写入前端 localStorage 热态缓存
           saveToHotT1Cache(activeId, t1Event.summary);
-          if (t1Event.importance >= 8) showMsg(`⚡ 闪电更新：已感知到重大事件 [${t1Event.summary}]`);
-
+          
           const { cloudbase } = await import('../../lib/cloudbase');
+
+          // B. 【新增】蓝图机制⑤：闪电通道更新 T3 核心状态
+          if (t1Event.importance >= 8) {
+            showMsg(`⚡ 闪电更新：已感知到重大事件 [${t1Event.summary}]`);
+            await cloudbase.callFunction({
+              name: 'update_t3_context',
+              data: { personaId: activeId, currentContext: t1Event.summary }
+            });
+          }
+
+          // C. 同步给云端向量库（T2 储备）
           await cloudbase.callFunction({
             name: 'vectorize_memory',
             data: { personaId: activeId, memories: [t1Event.summary] }
