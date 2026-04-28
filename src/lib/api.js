@@ -32,7 +32,7 @@ export const callDoubaoAPI = async (promptText, systemInstructionText = null, im
 };
 
 // ================== DeepSeek 双轨制引擎 ==================
-export const callDeepSeekAPI = async (promptText, systemInstructionText = null, mode = 'pro', signal = null) => {
+export const callDeepSeekAPI = async (promptText, systemInstructionText = null, mode = 'pro', signal = null, personaId = 'default') => {
   const apiMessages = [];
   if (systemInstructionText) apiMessages.push({ role: "system", content: systemInstructionText });
   apiMessages.push({ role: "user", content: promptText });
@@ -49,12 +49,13 @@ export const callDeepSeekAPI = async (promptText, systemInstructionText = null, 
 
     try {
       // 注意：如果未来切换为 Fetch 直连大模型，只需在此处 fetch(url, { signal }) 即可实现真正的 GPU 毫秒级断连
-      const res = await cloudbase.callFunction({
+     const res = await cloudbase.callFunction({
         name: 'deepseek_generate',
         data: { 
           messages: apiMessages,
           model: isPro ? 'deepseek-v4-pro' : 'deepseek-v4-flash',
-          useThinking: isPro 
+          useThinking: isPro,
+          personaId: personaId // 🚀 补上这一行，把 ID 传给云函数！
         },
         timeout: isPro ? 60000 : 15000 
       });
