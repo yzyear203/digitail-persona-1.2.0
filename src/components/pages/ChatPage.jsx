@@ -3,6 +3,8 @@ import { UserCircle, Sparkles, Send, Loader2, Quote } from 'lucide-react';
 import TypingText from '../ui/TypingText';
 import TasksModal from '../ui/TasksModal';
 import { callDoubaoAPI, callDeepSeekAPI } from '../../lib/api';
+// 引入刚刚建好的 DSM 引擎
+import { hasContentSignal, getHotT1, saveToHotT1Cache, buildSystemPrompt, applyBudgetAllocator } from '../../lib/dsm'; 
 
 export default function ChatPage({ setAppPhase, messages, setMessages, activePersona, showMsg }) {
   const [input, setInput] = useState('');
@@ -14,104 +16,106 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   const generationNonce = useRef(0);
   const abortControllerRef = useRef(null); 
   const messagesEndRef = useRef(null);
-  const memoryExtractionTimerRef = useRef(null); 
   
-  // 🚀 核心修复：引入记忆游标，绝不重复提炼历史聊天
-  const lastExtractedIndex = useRef(1);
+  // DSM 专用定时器
+  const extractTimerRef = useRef(null); 
 
-  // 🚀 解析完整的对象参数
   const activeId = activePersona?.id || 'default';
   const personaName = activePersona?.name || '数字分身';
-  const personaContent = activePersona?.content || '';
   const chatKey = `chat_history_${activeId}`;
-  const memoryKey = `chat_memory_${activeId}`;
 
-  // 初始化加载历史聊天
+  // 1. 初始化加载历史聊天
   useEffect(() => {
     if (messages.length === 1 && messages[0].role === 'system') {
       const savedHistory = localStorage.getItem(chatKey);
       if (savedHistory) {
-        const parsedHistory = JSON.parse(savedHistory);
-        setMessages(parsedHistory);
-        // 加载历史后，游标直接指向末尾，防重复
-        lastExtractedIndex.current = parsedHistory.length; 
+        setMessages(JSON.parse(savedHistory));
       }
     }
   }, [chatKey]);
 
-  // 历史记录持久化
+  // 2. 历史记录持久化
   useEffect(() => {
     if (messages.length > 1) {
       localStorage.setItem(chatKey, JSON.stringify(messages));
     }
   }, [messages, chatKey]);
 
-  // 自动滚动到底部
+  // 3. 自动滚动到底部
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, isTypingIndicator]);
 
-  // 🚀 核心重构：防重复的高质量记忆提炼引擎
+  // ==========================================
+  // ⚡ 核心接入：机制①守门人 + 机制⑤闪电通道
+  // ==========================================
   useEffect(() => {
-    // 提取还未被处理的新消息
-    const unextractedMessages = messages.slice(lastExtractedIndex.current);
+    // 只有在 AI 回复完毕后才启动 10 秒倒计时
+    if (isTypingIndicator) return;
     
-    // 阀门：只有积攒了至少 2 句用户的新发言，才触发提炼（防止太频繁）
-    if (unextractedMessages.filter(m => m.role === 'user').length < 2) return; 
-    
-    if (memoryExtractionTimerRef.current) clearTimeout(memoryExtractionTimerRef.current);
-    
-    memoryExtractionTimerRef.current = setTimeout(async () => {
-      // 锁定游标，防止异步期间重复触发
-      lastExtractedIndex.current = messages.length;
+    const lastMsg = messages[messages.length - 1];
+    if (!lastMsg || lastMsg.role !== 'assistant') return;
 
+    if (extractTimerRef.current) clearTimeout(extractTimerRef.current);
+
+    extractTimerRef.current = setTimeout(async () => {
+      // 门卫前置拦截（零成本正则）
+      if (!hasContentSignal(messages)) {
+        console.log("🛡️ [DSM 守门人] 过滤无意义日常，跳过 LLM 提取");
+        return;
+      }
+
+      console.log("⚡ [DSM 闪电通道] 守门人放行，启动 Flash 提炼...");
       try {
-        const historyForExtraction = unextractedMessages
+        const historyForExtraction = messages.slice(-6)
           .filter(m => m.role !== 'system')
           .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.replace(/<del>.*?<\/del>|<\/?recall>|\[quote:.*?\]/g, '')}`)
           .join('\n');
 
-        // 🚀 强化 Prompt：明确拒绝垃圾信息，只要硬核事实！
-        const prompt = `分析以下【最新】的对话记录，提取极具价值的【增量记忆】。
-严禁提取无意义的日常。必须提取具体的【实体信息】：
-1. 用户的姓名、身份、职业
-2. 明确的计划、地点（如：打算去华山旅游、去哪吃饭）
-3. 明确的喜好或讨厌的事物
-请务必在每条记忆前标明主语（例如：[用户]准备五一去爬华山）。严格按下方JSON输出：
+        const prompt = `分析以下最新对话，提取极具价值的【增量记忆】（如新计划、新事实、情绪剧变）。
+严禁提取无意义的日常。必须以第三人称（如“用户”）陈述。
+严格按下方JSON输出：
 {
-  "recent_events": ["提取的重要事件/计划/实体"],
-  "core_traits": ["提取的深层设定/身份/名字"]
+  "importance": 8,
+  "summary": "用户打算五一去华山"
 }
-如果没有硬核信息，对应的数组留空！
-对话记录：\n${historyForExtraction}`;
+如果没有硬核信息，importance 填 0，summary 留空。
+对话：\n${historyForExtraction}`;
 
-        const resJSONStr = await callDeepSeekAPI(prompt, "你是一个只输出合法JSON的信息提取机。", "flash", null);
+        // 强制走极速廉价的 flash 模型
+        const resJSONStr = await callDeepSeekAPI(prompt, "你是一个只输出合法JSON的机器。", "flash", null, activeId);
         
-        let newMemory = { recent_events: [], core_traits: [] };
+        let t1Event = { importance: 0, summary: "" };
         try { 
-          newMemory = JSON.parse(resJSONStr.replace(/```json|```/g, '').trim()); 
+          t1Event = JSON.parse(resJSONStr.replace(/```json|```/g, '').trim()); 
         } catch (e) { return; }
 
-        const memoryItems = [
-          ...(newMemory.recent_events || []),
-          ...(newMemory.core_traits || [])
-        ];
+        if (t1Event.importance > 0 && t1Event.summary) {
+          // A. 写入前端 localStorage 热态缓存
+          saveToHotT1Cache(activeId, t1Event.summary);
 
-        if (memoryItems.length > 0) {
+          // B. 重大事件弹窗感知
+          if (t1Event.importance >= 8) {
+            showMsg(`⚡ 闪电更新：已感知到重大事件 [${t1Event.summary}]`);
+          }
+
+          // C. 同步给云端向量库（复用你写好的云函数）
           const { cloudbase } = await import('../../lib/cloudbase');
           await cloudbase.callFunction({
             name: 'vectorize_memory',
-            data: { personaId: activeId, memories: memoryItems }
+            data: { personaId: activeId, memories: [t1Event.summary] }
           });
         }
       } catch (error) {
-        // 静默失败不打扰用户
+        console.warn("Flash 提取中断:", error.message);
       }
-    }, 10000); 
+    }, 10000); // 10秒无输入则触发
 
-    return () => clearTimeout(memoryExtractionTimerRef.current);
-  }, [messages, activeId]);
+    return () => clearTimeout(extractTimerRef.current);
+  }, [messages, isTypingIndicator, activeId]);
 
-  const getSubconsciousMemoryContext = () => "";
   
+  // ==========================================
+  // ⚡ 核心接入：机制③ 动态预算与 System Prompt 直注
+  // ==========================================
   const handleSendMessage = async (e) => {
     if (e) e.preventDefault();
     const userText = input.trim();
@@ -119,9 +123,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
 
     setInput('');
     
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
+    if (abortControllerRef.current) abortControllerRef.current.abort();
     abortControllerRef.current = new AbortController();
 
     const currentNonce = Date.now();
@@ -138,30 +140,30 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     });
 
     setIsTypingIndicator(true);
+    
+    // 如果用户在这10秒内说话了，立刻清除提取定时器
+    if (extractTimerRef.current) clearTimeout(extractTimerRef.current);
 
     try {
-      const recentMessages = messages.filter(m => m.role !== 'system').slice(-8);
-      const chatHistoryStr = recentMessages.map(m => 
+      // 1. 获取热态 T1 缓存，并构建 System Prompt
+      const hotT1 = getHotT1(activeId);
+      const sysPrompt = buildSystemPrompt(activePersona, hotT1, false, 0);
+
+      // 2. 动态预算分配（丢弃过老的无用历史）
+      const allT0 = [...messages.filter(m => m.role !== 'system'), { role: 'user', text: userText }];
+      // 预估 sysPrompt 长度，留出 3000 Token 上限
+      const sysPromptLength = Math.ceil(sysPrompt.length / 1.5); 
+      const prunedT0 = applyBudgetAllocator(allT0, sysPromptLength, 3000);
+
+      const chatHistoryStr = prunedT0.map(m => 
         `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.replace(/<del>.*?<\/del>|<\/?recall>|\[quote:.*?\]/g, '')}`
       ).join('\n');
 
-      const memoryContextStr = getSubconsciousMemoryContext();
-
-     const responseText = await callDeepSeekAPI(
-        `对话历史:\n${chatHistoryStr}\n\nUser: ${userText}\nAssistant:`,
-        `【最高指令：深度灵魂模拟】
-你现在的身份是：${personaName}。这是你的自我认知。
-你的潜意识设定与说话风格如下：
-${personaContent}
-
-【高级交互协议（违背将被重置）】：
-1. 【零知识开局】：你当前对屏幕对面的用户【一无所知】。绝对禁止随意猜测、编造用户的身份。一切对用户的认知必须通过对话慢慢建立，最初应保持符合设定的陌生感或防备感。
-2. 【记忆觉醒法则】：你现在可以通过后台隐式检索历史记忆。**如果被问及过去发生的事、状态或喜好，必须通过相关词进行搜索。如果搜索不到，绝不能硬编，必须以你当前分身的性格（如逃避、暴躁、直言不讳）来表达“不知道”或“忘了”。**
-3. 【回复策略】：优先回复最新消息，没必要每句都回。不想回直接输出 [SILENCE]。
-4. 【引用机制】：选择性回复格式 [quote: 原文内容]。
-5. 【强制格式】：单气泡不允许换行。并发多消息请用 "|||" 切分。
-6. 【拟人化】：撤回使用 <recall>...</recall>，犹豫使用 <del>...</del>。禁止任何动作描写。`,
-        'pro', // 强烈建议检索时使用 pro
+      // 3. 呼叫模型（默认走 Pro，携带工具声明）
+      const responseText = await callDeepSeekAPI(
+        `对话历史:\n${chatHistoryStr}\n\nAssistant:`,
+        sysPrompt,
+        'pro', 
         abortControllerRef.current.signal,
         activeId 
       );
@@ -260,7 +262,6 @@ ${personaContent}
         </div>
       </header>
 
-      {/* 🚀 你的核心 UI，一字不差的保留了！ */}
       <main className="flex-1 overflow-y-auto p-8">
         {messages.map((m, index) => {
           if (m.role === 'system') return null;
@@ -306,7 +307,7 @@ ${personaContent}
                    {m.role === 'assistant' && m.isAnimated ? (
                       <TypingText 
                         content={actualText} 
-                        persona={personaContent} 
+                        persona={activePersona?.content || ''} 
                         scrollRef={messagesEndRef}
                         onComplete={() => {
                           if (isRecallMsg) {
