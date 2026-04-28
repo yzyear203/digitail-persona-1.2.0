@@ -69,7 +69,14 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
         const resJSONStr = await callDeepSeekAPI(prompt, "你是一个极简的信息提取机，只输出合法JSON。", "flash", null);
         
         let newMemory = { transient_states: [], recent_events: [], core_traits: [] };
-        try { newMemory = JSON.parse(resJSONStr.replace(/```json|```/g, '').trim()); } catch (e) { return; }
+        
+        // 🚨 注入观测点 1：排查 JSON 解析是否因为模型输出脏数据而失败
+        try { 
+          newMemory = JSON.parse(resJSONStr.replace(/```json|```/g, '').trim()); 
+        } catch (e) { 
+          console.error("❌ [提炼阻断] JSON解析失败, 原始大模型返回:", resJSONStr, e); 
+          return; 
+        }
 
         // 提取出所有有效文本
         const memoryItems = [
@@ -79,6 +86,9 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
         ];
 
         if (memoryItems.length > 0) {
+          // 🚨 注入观测点 2：确认是否走到了呼叫云函数这一步
+          console.log("🚀 [提炼成功] 准备呼叫云函数 vectorize_memory, payload:", { personaId: activeId, memories: memoryItems });
+          
           // 🚀 V2.0 升级：直接呼叫云函数，将新记忆送入 TCB 向量库进行 Embedding
           const { cloudbase } = await import('../../lib/cloudbase');
           await cloudbase.callFunction({
@@ -91,7 +101,8 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
           console.log("🧠 增量记忆已成功推流至云端向量库！");
         }
       } catch (error) {
-        // 静默失败不打扰用户
+        // 🚨 注入观测点 3：排查云端调用是否崩溃
+        console.error("🚨 [致命中断] 旁路记忆流转失败，云函数报错或网络异常:", error);
       }
     }, 10000); 
 
@@ -102,6 +113,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   // 🚀 原本地记忆读取机制已彻底粉碎，交由云端 Tool Calls 自主接管
   // 留空以兼容上下文变量引用
   const getSubconsciousMemoryContext = () => "";
+  
   const handleSendMessage = async (e) => {
     if (e) e.preventDefault();
     const userText = input.trim();
