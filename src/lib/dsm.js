@@ -76,16 +76,18 @@ function estimateTokens(text) {
  * 组装符合 P0 ~ P2 优先级的 System Prompt
  */
 export function buildSystemPrompt(activePersona, hotT1, isCooling = false, daysSinceLastChat = 0) {
+  // 👑 核心升级：安全解析 JSON 档案
   let t3 = {};
   try {
     t3 = JSON.parse(activePersona?.content || '{}');
   } catch(e) {
+    // 兼容旧版纯文本
     t3 = { identity: { value: activePersona?.content } }; 
   }
 
+  // [BLOCK 1 - P0] T3 核心档案 (紧凑格式解析)
   let prompt = `【最高指令：深度灵魂模拟】\n你是：${activePersona?.name || '数字分身'}。\n你的核心设定与潜意识：\n`;
   
-  // [BLOCK 1 - P0] T3 紧凑格式直注，大幅节省 Token
   if (t3.identity?.value || t3.personality?.value) {
     prompt += `[用户档案] ${t3.identity?.value || '未知'} | 兴趣:${(t3.interests || []).map(i => i.topic).join('/') || '未知'} | 性格:${t3.personality?.value || '未知'} | 关系:${t3.relationship?.archetype || '分身'} 亲密度${t3.relationship?.intimacy_level || 5}/10 | 状态:${t3.current_context?.value || '无'} \n`;
   }
@@ -101,36 +103,6 @@ export function buildSystemPrompt(activePersona, hotT1, isCooling = false, daysS
   }
 
   // [BLOCK 4 - P0 固定] 交互协议与 T2 工具声明
-  prompt += `
-【高级交互协议（违背将被重置）】：
-1. 【零知识开局】：你对用户的过去一无所知，绝对禁止臆想、捏造用户身份。
-2. 【记忆觉醒法则】：只要对话涉及用户的身体、计划、去过的地方、名字等过去的事，**必须调用 search_subconscious_memory 工具**。如果工具查不到，必须坦白说“不记得了”或“你没说过”。
-3. 【回复策略】：优先回复最新消息，不想回直接输出 [SILENCE]。
-4. 【引用机制】：如果需要针对性回答，选择性使用格式 [quote: 原文内容]。
-5. 【拟人化】：撤回消息使用 <recall>撤回的具体内容</recall>，打字犹豫使用 <del>本来想发的话</del>。绝对禁止任何动作描写（如“笑”、“叹气”）。
-6. 【强制格式】：单气泡内绝对禁止换行。并发多消息必须用 "|||" 切分。\n`;
-
-  // [BLOCK 5 - P1 / 冷启动]
-  if (hotT1 && hotT1.length > 0) {
-    prompt += `\n【近期短时记忆】（无需检索的昨日事实）：\n`;
-    hotT1.forEach(item => {
-      const dateStr = new Date(item.timestamp).toISOString().split('T')[0];
-      prompt += `· [${dateStr}] ${item.summary}\n`;
-    });
-  } else if (!t3.identity?.value) {
-    // 触发蓝图冷启动流程
-    prompt += `\n【冷启动破冰指令】\n这是与用户的第一次对话，你对用户一无所知。请在接下来的前3轮对话中，以极其自然的方式（反问、聊天中顺带问）获取以下信息，并且每轮只问一件事，禁止连续追问：1. 用户的名字或称呼 2. 最近在忙什么 / 做什么 3. 有什么兴趣爱好。禁止说"请问你叫什么名字"这种机器人式提问。要像朋友一样自然聊天。\n`;
-  }
-  
-  return prompt;
-}
-  
-  // [BLOCK 3 - P0 条件] 关系维系
-  if (isCooling) {
-    prompt += `\n【关系维系指令】与用户的关系处于冷却期，若话题自然，适时进行暖心关怀，禁止生硬刻意。\n`;
-  }
-
-// [BLOCK 4 - P0 固定] 交互协议与 T2 工具声明
   // 配合后端的 search_subconscious_memory
   prompt += `
 【高级交互协议（违背将被重置）】：
@@ -141,7 +113,7 @@ export function buildSystemPrompt(activePersona, hotT1, isCooling = false, daysS
 5. 【拟人化】：撤回消息使用 <recall>撤回的具体内容</recall>，打字犹豫使用 <del>本来想发的话</del>。绝对禁止任何动作描写（如“笑”、“叹气”）。
 6. 【强制格式】：单气泡内绝对禁止换行。并发多消息必须用 "|||" 切分。\n`;
 
-  // [BLOCK 5 - P1] 热态 T1 摘要
+  // [BLOCK 5 - P1] 热态 T1 摘要 或 冷启动破冰
   if (hotT1 && hotT1.length > 0) {
     prompt += `\n【近期短时记忆】（无需检索的昨日事实）：\n`;
     hotT1.forEach(item => {
@@ -149,6 +121,9 @@ export function buildSystemPrompt(activePersona, hotT1, isCooling = false, daysS
       const dateStr = new Date(item.timestamp).toISOString().split('T')[0];
       prompt += `· [${dateStr}] ${item.summary}\n`;
     });
+  } else if (!t3.identity?.value) {
+    // 👑 触发蓝图冷启动流程
+    prompt += `\n【冷启动破冰指令】\n这是与用户的第一次对话，你对用户一无所知。请在接下来的前3轮对话中，以极其自然的方式（反问、聊天中顺带问）获取以下信息，并且每轮只问一件事，禁止连续追问：1. 用户的名字或称呼 2. 最近在忙什么 / 做什么 3. 有什么兴趣爱好。禁止说"请问你叫什么名字"这种机器人式提问。要像朋友一样自然聊天。\n`;
   }
   
   return prompt;
