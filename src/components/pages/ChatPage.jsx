@@ -155,7 +155,8 @@ ${personaContent}
 5. 【强制格式】：单气泡不允许换行。并发多消息请用 "|||" 切分。
 6. 【拟人化】：撤回使用 <recall>...</recall>，犹豫使用 <del>...</del>。禁止任何动作描写。`,
         'flash',
-        abortControllerRef.current.signal 
+        abortControllerRef.current.signal,
+        activeId // 🚀 补上这最后一行！这是第五个参数，把当前身份的 ID 传进去
       );
 
       if (generationNonce.current !== currentNonce) return;
