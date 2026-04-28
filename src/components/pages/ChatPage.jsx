@@ -1,9 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { UserCircle, Sparkles, Send, Loader2, Quote } from 'lucide-react';
-import TypingText from '../ui/TypingText';
+import ChatHeader from '../chat/ChatHeader';
+import ChatMessageList from '../chat/ChatMessageList';
+import ChatInput from '../chat/ChatInput';
 import TasksModal from '../ui/TasksModal';
 import { callDoubaoAPI, callDeepSeekAPI } from '../../lib/api';
-// 引入刚刚建好的 DSM 引擎
 import { hasContentSignal, getHotT1, saveToHotT1Cache, buildSystemPrompt, applyBudgetAllocator } from '../../lib/dsm'; 
 
 export default function ChatPage({ setAppPhase, messages, setMessages, activePersona, showMsg }) {
@@ -16,39 +16,31 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   const generationNonce = useRef(0);
   const abortControllerRef = useRef(null); 
   const messagesEndRef = useRef(null);
-  
-  // DSM 专用定时器
   const extractTimerRef = useRef(null); 
 
   const activeId = activePersona?.id || 'default';
-  const personaName = activePersona?.name || '数字分身';
   const chatKey = `chat_history_${activeId}`;
 
-  // 1. 初始化加载历史聊天
+  // 1. 初始化与持久化
   useEffect(() => {
     if (messages.length === 1 && messages[0].role === 'system') {
       const savedHistory = localStorage.getItem(chatKey);
-      if (savedHistory) {
-        setMessages(JSON.parse(savedHistory));
-      }
+      if (savedHistory) setMessages(JSON.parse(savedHistory));
     }
   }, [chatKey]);
 
-  // 2. 历史记录持久化
   useEffect(() => {
-    if (messages.length > 1) {
-      localStorage.setItem(chatKey, JSON.stringify(messages));
-    }
+    if (messages.length > 1) localStorage.setItem(chatKey, JSON.stringify(messages));
   }, [messages, chatKey]);
 
-  // 3. 自动滚动到底部
-  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, isTypingIndicator]);
+  useEffect(() => { 
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); 
+  }, [messages, isTypingIndicator]);
 
   // ==========================================
-  // ⚡ 核心接入：机制①守门人 + 机制⑤闪电通道
+  // ⚡ DSM 引擎：机制①守门人 + 机制⑤闪电通道
   // ==========================================
   useEffect(() => {
-    // 只有在 AI 回复完毕后才启动 10 秒倒计时
     if (isTypingIndicator) return;
     
     const lastMsg = messages[messages.length - 1];
@@ -57,7 +49,6 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     if (extractTimerRef.current) clearTimeout(extractTimerRef.current);
 
     extractTimerRef.current = setTimeout(async () => {
-      // 门卫前置拦截（零成本正则）
       if (!hasContentSignal(messages)) {
         console.log("🛡️ [DSM 守门人] 过滤无意义日常，跳过 LLM 提取");
         return;
@@ -71,33 +62,21 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
           .join('\n');
 
         const prompt = `分析以下最新对话，提取极具价值的【增量记忆】（如新计划、新事实、情绪剧变）。
-严禁提取无意义的日常。必须以第三人称（如“用户”）陈述。
+严禁提取无意义的日常。必须以第三人称陈述。
 严格按下方JSON输出：
-{
-  "importance": 8,
-  "summary": "用户打算五一去华山"
-}
+{ "importance": 8, "summary": "用户打算五一去华山" }
 如果没有硬核信息，importance 填 0，summary 留空。
 对话：\n${historyForExtraction}`;
 
-        // 强制走极速廉价的 flash 模型
         const resJSONStr = await callDeepSeekAPI(prompt, "你是一个只输出合法JSON的机器。", "flash", null, activeId);
         
         let t1Event = { importance: 0, summary: "" };
-        try { 
-          t1Event = JSON.parse(resJSONStr.replace(/```json|```/g, '').trim()); 
-        } catch (e) { return; }
+        try { t1Event = JSON.parse(resJSONStr.replace(/```json|```/g, '').trim()); } catch (e) { return; }
 
         if (t1Event.importance > 0 && t1Event.summary) {
-          // A. 写入前端 localStorage 热态缓存
           saveToHotT1Cache(activeId, t1Event.summary);
+          if (t1Event.importance >= 8) showMsg(`⚡ 闪电更新：已感知到重大事件 [${t1Event.summary}]`);
 
-          // B. 重大事件弹窗感知
-          if (t1Event.importance >= 8) {
-            showMsg(`⚡ 闪电更新：已感知到重大事件 [${t1Event.summary}]`);
-          }
-
-          // C. 同步给云端向量库（复用你写好的云函数）
           const { cloudbase } = await import('../../lib/cloudbase');
           await cloudbase.callFunction({
             name: 'vectorize_memory',
@@ -107,14 +86,14 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
       } catch (error) {
         console.warn("Flash 提取中断:", error.message);
       }
-    }, 10000); // 10秒无输入则触发
+    }, 10000); 
 
     return () => clearTimeout(extractTimerRef.current);
   }, [messages, isTypingIndicator, activeId]);
 
   
   // ==========================================
-  // ⚡ 核心接入：机制③ 动态预算与 System Prompt 直注
+  // 💬 发送中枢：机制③ 动态预算与 System Prompt 直注
   // ==========================================
   const handleSendMessage = async (e) => {
     if (e) e.preventDefault();
@@ -122,7 +101,6 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     if (!userText) return;
 
     setInput('');
-    
     if (abortControllerRef.current) abortControllerRef.current.abort();
     abortControllerRef.current = new AbortController();
 
@@ -140,18 +118,13 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     });
 
     setIsTypingIndicator(true);
-    
-    // 如果用户在这10秒内说话了，立刻清除提取定时器
     if (extractTimerRef.current) clearTimeout(extractTimerRef.current);
 
     try {
-      // 1. 获取热态 T1 缓存，并构建 System Prompt
       const hotT1 = getHotT1(activeId);
       const sysPrompt = buildSystemPrompt(activePersona, hotT1, false, 0);
 
-      // 2. 动态预算分配（丢弃过老的无用历史）
       const allT0 = [...messages.filter(m => m.role !== 'system'), { role: 'user', text: userText }];
-      // 预估 sysPrompt 长度，留出 3000 Token 上限
       const sysPromptLength = Math.ceil(sysPrompt.length / 1.5); 
       const prunedT0 = applyBudgetAllocator(allT0, sysPromptLength, 3000);
 
@@ -159,7 +132,6 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
         `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.replace(/<del>.*?<\/del>|<\/?recall>|\[quote:.*?\]/g, '')}`
       ).join('\n');
 
-      // 3. 呼叫模型（默认走 Pro，携带工具声明）
       const responseText = await callDeepSeekAPI(
         `对话历史:\n${chatHistoryStr}\n\nAssistant:`,
         sysPrompt,
@@ -169,11 +141,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
       );
 
       if (generationNonce.current !== currentNonce) return;
-
-      if (responseText.includes('[SILENCE]')) {
-        setIsTypingIndicator(false);
-        return;
-      }
+      if (responseText.includes('[SILENCE]')) { setIsTypingIndicator(false); return; }
 
       const replyParts = responseText.split(/\|\|\||-{3,}|={3,}|\n+/).map(s => s.trim()).filter(s => s);
       setIsTypingIndicator(false);
@@ -183,13 +151,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
 
         setMessages(prev => [
           ...prev, 
-          { 
-            id: Date.now() + i, 
-            role: 'assistant', 
-            text: replyParts[i], 
-            time: new Date().toLocaleTimeString(), 
-            isAnimated: true 
-          }
+          { id: Date.now() + i, role: 'assistant', text: replyParts[i], time: new Date().toLocaleTimeString(), isAnimated: true }
         ]);
         
         if (i < replyParts.length - 1) {
@@ -198,9 +160,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
         }
       }
     } catch (error) {
-      if (error.name === 'AbortError') {
-        console.log('🛑 请求已按预期被前端物理阻断');
-      } else if (generationNonce.current === currentNonce) {
+      if (error.name !== 'AbortError' && generationNonce.current === currentNonce) {
         showMsg(`❌ 意识传输中断: ${error.message}`);
         setIsTypingIndicator(false);
       }
@@ -218,7 +178,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
       
       let tasks = [];
       try { tasks = JSON.parse(jsonResponse.replace(/```json|```/g, '').trim()); } 
-      catch (e) { console.warn('JSON 解析失败', e); }
+      catch (e) {}
       
       setExtractedTasks(tasks);
       setShowTasksModal(true);
@@ -231,124 +191,26 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
 
   return (
     <div className="h-screen bg-slate-100 flex flex-col font-sans overflow-hidden">
-      <header className="bg-white border-b border-slate-200 px-8 py-5 flex justify-between items-center shadow-sm z-10">
-        <div className="flex items-center gap-4">
-          <div className="bg-indigo-50 p-3 rounded-2xl">
-            <UserCircle className="text-indigo-600" size={28}/>
-          </div>
-         <div>
-            <h1 className="text-xl font-black text-slate-800 truncate max-w-[200px]">
-              {isTypingIndicator ? '对方正在输入...' : personaName}
-            </h1>
-            <p className="text-xs font-bold text-emerald-500 flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span> 在线
-            </p>
-          </div>
-        </div>
-        <div className="flex gap-4">
-          <button 
-            onClick={handleExtractTasks} 
-            disabled={isExtracting} 
-            className="px-5 py-2.5 bg-indigo-50 text-indigo-600 rounded-xl font-black text-sm hover:bg-indigo-100 transition-all flex items-center gap-2"
-          >
-            {isExtracting ? <Loader2 size={16} className="animate-spin"/> : <Sparkles size={16}/>} 智能代办
-          </button>
-          <button 
-            onClick={() => setAppPhase('dashboard')} 
-            className="px-5 py-2.5 bg-slate-50 text-slate-600 rounded-xl font-black text-sm hover:bg-slate-100 transition-all"
-          >
-            返回大厅
-          </button>
-        </div>
-      </header>
-
-      <main className="flex-1 overflow-y-auto p-8">
-        {messages.map((m, index) => {
-          if (m.role === 'system') return null;
-
-          const isRecallMsg = m.text.includes('<recall>');
-          const quoteMatch = m.text.match(/\[quote:\s*(.*?)\]/);
-          const quoteText = quoteMatch ? quoteMatch[1] : null;
-          
-          const actualText = m.text.replace(/<\/?recall>|\[quote:.*?\]/g, '').trim();
-          const strippedText = actualText.replace(/<del>.*?<\/del>/g, '').trim();
-          
-          let showTime = false;
-          const prevMsg = messages.slice(0, index).reverse().find(msg => msg.role !== 'system');
-          if (!prevMsg || m.id - prevMsg.id > 300000) showTime = true;
-          
-          if (!strippedText && !m.isAnimated && !m.isRecalled) return null;
-
-          return (
-            <React.Fragment key={m.id}>
-              {showTime && (
-                <div className="flex justify-center my-5">
-                  <span className="text-xs text-slate-400 font-medium">{m.time}</span>
-                </div>
-              )}
-              
-              {m.isRecalled ? (
-                <div className="flex justify-center my-4">
-                  <span className="text-xs text-slate-500 font-medium bg-slate-200/60 px-3 py-1 rounded-md">
-                    "对方" 撤回了一条消息
-                  </span>
-                </div>
-              ) : (
-                <div className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'} mb-6`}>
-                  <div className={`max-w-[75%] px-6 py-4 rounded-3xl shadow-sm text-[15px] font-medium leading-relaxed ${m.role === 'user' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white text-slate-800 border border-slate-200 rounded-bl-none'}`}>
-                    
-                    {quoteText && (
-                      <div className="mb-2 p-2 bg-slate-100/50 rounded-lg border-l-4 border-indigo-400 text-xs text-slate-500 flex items-start gap-2 italic">
-                        <Quote size={12} className="shrink-0 mt-0.5" />
-                        <span className="truncate">{quoteText}</span>
-                      </div>
-                    )}
-                    
-                   {m.role === 'assistant' && m.isAnimated ? (
-                      <TypingText 
-                        content={actualText} 
-                        persona={activePersona?.content || ''} 
-                        scrollRef={messagesEndRef}
-                        onComplete={() => {
-                          if (isRecallMsg) {
-                            setTimeout(() => {
-                              setMessages(p => p.map(msg => msg.id === m.id ? { ...msg, isAnimated: false, isRecalled: true } : msg));
-                            }, 1200);
-                          } else {
-                            setMessages(p => p.map(msg => msg.id === m.id ? { ...msg, isAnimated: false } : msg));
-                          }
-                        }} 
-                      />
-                    ) : (
-                      <span className="whitespace-pre-wrap">{strippedText}</span>
-                    )}
-                  </div>
-                </div>
-              )}
-            </React.Fragment>
-          );
-        })}
-        <div ref={messagesEndRef} className="h-4"/>
-      </main>
-
-      <footer className="bg-white border-t border-slate-200 p-6">
-        <form onSubmit={handleSendMessage} className="max-w-4xl mx-auto flex gap-4">
-          <input 
-            type="text" 
-            value={input} 
-            onChange={e => setInput(e.target.value)} 
-            placeholder="与分身深入交流..." 
-            className="flex-1 bg-slate-50 border border-slate-200 rounded-2xl px-6 py-4 focus:ring-2 focus:ring-indigo-500 outline-none font-bold text-slate-800" 
-          />
-          <button 
-            type="submit" 
-            disabled={!input.trim()} 
-            className="px-8 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-black shadow-lg transition-all"
-          >
-            <Send/>
-          </button>
-        </form>
-      </footer>
+      <ChatHeader 
+        activePersona={activePersona} 
+        isTypingIndicator={isTypingIndicator} 
+        isExtracting={isExtracting} 
+        handleExtractTasks={handleExtractTasks} 
+        setAppPhase={setAppPhase} 
+      />
+      
+      <ChatMessageList 
+        messages={messages} 
+        setMessages={setMessages} 
+        activePersona={activePersona} 
+        messagesEndRef={messagesEndRef} 
+      />
+      
+      <ChatInput 
+        input={input} 
+        setInput={setInput} 
+        handleSendMessage={handleSendMessage} 
+      />
       
       {showTasksModal && <TasksModal tasks={extractedTasks} onClose={() => setShowTasksModal(false)} />}
     </div>
