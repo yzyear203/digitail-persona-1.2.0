@@ -102,7 +102,7 @@ export default function App() {
     setAppPhase('auth');
   };
 
-// 2. 开始启动 AI 多模态人格蒸馏 (完全替换该方法)
+  // 2. 开始启动 AI 多模态人格蒸馏 (完全替换该方法)
   const handleStartDistillation = async () => {
     if (uploadedFiles.length === 0) return;
     setAppPhase('distilling');
@@ -140,7 +140,7 @@ B: [说话内容]
       setDistillProgress(50);
       setDistillLogs(prev => [...prev, '[深度认知] 启动 DeepSeek V4 Pro 思维链，进行 BAU 临床级侧写...']);
 
-      // 👑 终极进化：融合 FBI 临床级侧写与结构化 JSON 引擎
+      // 👑 终极进化：完美保留 FBI 侧写逻辑并强制输出 DSM 2.2 标准的 JSON
       let prompt = `你是一个融合了顶级行为学专家与 FBI 犯罪心理侧写师能力的数字人格架构师。
 请仔细阅读以下原始聊天切片，从【发消息者】的角度，提炼出符合 DSM 2.2 标准的结构化档案。
 
@@ -193,7 +193,7 @@ JSON 格式必须严格如下：
 }`;
 
       if (combinedChatText) prompt += `\n\n【必须进行分析的聊天记录原始切片】：\n${combinedChatText}\n`;
-      if (!combinedChatText) prompt = "用户未上传素材，请随机生成一个合法的测试型 T3 JSON 档案。";
+      if (!combinedChatText) prompt = "用户未上传素材，请随机生成一个合法的极度压抑的测试型 T3 JSON 档案。";
 
       // 👑 调用 DeepSeek API，默认走 pro 模式
       const responseText = await callDeepSeekAPI(
@@ -230,11 +230,11 @@ JSON 格式必须严格如下：
       setTimeout(() => setAppPhase('dashboard'), 3500);
     }
   };
- // 3. 将档案载入聊天引擎
+
+  // 3. 将档案载入聊天引擎
   const loadPersonaAndChat = (persona) => {
     // 🚀 核心修复：传递完整的 persona 对象（包含 name, content, id）
     setActivePersona(persona);
-    // 初始化系统指令气泡（隐藏气泡），由于这是加载页面，所以无需触发动画
     // 注意：DSM 2.2 中这里存放的是 SYSTEM_BOOT 占位，真正的 Prompt 在 ChatPage 实时组装
     setMessages([
       { id: Date.now(), role: 'system', text: "SYSTEM_BOOT", time: new Date().toLocaleTimeString(), isAnimated: false }
@@ -302,6 +302,7 @@ JSON 格式必须严格如下：
           messages={messages}
           setMessages={setMessages}
           activePersona={activePersona}
+          setActivePersona={setActivePersona} // 👑 补全了此前遗漏的重要状态分发！
           showMsg={showMsg}
         />
       )}
