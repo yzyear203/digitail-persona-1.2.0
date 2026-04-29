@@ -85,22 +85,41 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
        if (t1Event.importance > 0 && t1Event.summary) {
           saveToHotT1Cache(activeId, t1Event.summary);
           
-          const { cloudbase } = await import('../../lib/cloudbase');
+          // 👑 引入你配置好的 db 实例
+          const { db } = await import('../../lib/cloudbase');
 
           if (t1Event.importance >= 8) {
             showMsg(`⚡ 闪电更新：已感知到重大事件 [${t1Event.summary}]`);
+            let newT3Str = "";
             setActivePersona(prev => {
               try {
                 const t3 = JSON.parse(prev.content);
                 t3.current_context = { value: t1Event.summary, expires_at: new Date(Date.now() + 7*24*3600*1000).toISOString() };
-                return { ...prev, content: JSON.stringify(t3) };
+                newT3Str = JSON.stringify(t3);
+                return { ...prev, content: newT3Str };
               } catch(e) { return prev; }
             });
-            await cloudbase.callFunction({
-              name: 'update_t3_context',
-              data: { personaId: activeId, currentContext: t1Event.summary }
-            });
+            
+            // 👑 完全使用你提供的文档语法：单条更新 T3 档案
+            if (db && newT3Str) {
+              try {
+                await db.collection('personas').doc(activeId).update({ content: newT3Str });
+              } catch (err) { console.error('T3档案更新失败:', err); }
+            }
           }
+
+          // 👑 完全使用你提供的文档语法：单条新增记忆
+          if (db) {
+            try {
+              await db.collection('persona_memories').add({
+                personaId: activeId,
+                text: `[用户] ${t1Event.summary}`, // 适配你图里的 text 格式
+                createTime: new Date()             // 适配你图里的 createTime 格式
+              });
+              console.log("✅ 记忆已成功写入 TCB 数据库!");
+            } catch (err) { console.error('记忆写入失败:', err); }
+          }
+        }
 
           await cloudbase.callFunction({
             name: 'vectorize_memory',
