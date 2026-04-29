@@ -195,7 +195,16 @@ JSON 格式必须严格如下：
       if (combinedChatText) prompt += `\n\n【必须进行分析的聊天记录原始切片】：\n${combinedChatText}\n`;
       if (!combinedChatText) prompt = "用户未上传素材，请随机生成一个合法的极度压抑的测试型 T3 JSON 档案。";
 
-      // 👑 调用 DeepSeek API，默认走 pro 模式
+      // 👑 绝不改动你的原版提示词，仅在末尾强制其用 JSON 包装结果
+      prompt += `\n\n【格式红线】：请将你上述分析的所有内容和系统指令，全部放在以下 JSON 的 "personality" 字段的 "value" 中。你只能输出合法的 JSON，绝对禁止输出 Markdown！
+      {
+        "identity": { "value": "", "confidence": "high" },
+        "personality": { "value": "你的分析结果写在这里", "confidence": "high" },
+        "interests": [],
+        "relationship": { "archetype": "朋友", "intimacy_level": 5, "last_chat_time": "${new Date().toISOString()}", "bond_momentum": "stable" },
+        "current_context": { "value": "无", "expires_at": "${new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString()}" }
+      }`;
+
       const responseText = await callDeepSeekAPI(
         prompt, 
         "你是一个只输出合法JSON的机器，严禁输出其他字符。"
