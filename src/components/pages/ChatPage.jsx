@@ -70,11 +70,12 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
           .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.replace(/<del>.*?<\/del>|<\/?recall>|\[quote:.*?\]/g, '')}`)
           .join('\n');
 
-        const prompt = `分析以下最新对话，提取极具价值的【增量记忆】（如新计划、新事实、情绪剧变）。
-严禁提取无意义的日常。必须以第三人称陈述。
-严格按下方JSON输出：
-{ "importance": 8, "summary": "用户打算五一去华山" }
-如果没有硬核信息，importance 填 0，summary 留空。
+        const prompt = `分析以下最新对话，提取极具价值的【增量记忆】。
+严禁提取无意义的日常，必须以第三人称陈述。
+【重要性打分规则】：日常小事0-3，明确计划4-7，重大人生事件（如拿到offer、失恋、生病、离职）必须打 8 到 10 分！
+严格按下方JSON输出（不要包含markdown格式）：
+{ "importance": 9, "summary": "用户今天拿到了字节跳动的Offer" }
+如果没有硬核信息，importance 填 0。
 对话：\n${historyForExtraction}`;
 
         const resJSONStr = await callDeepSeekAPI(prompt, "你是一个只输出合法JSON的机器。", "flash", null, activeId);
@@ -85,7 +86,6 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
        if (t1Event.importance > 0 && t1Event.summary) {
           saveToHotT1Cache(activeId, t1Event.summary);
           
-          // 👑 引入你配置好的 db 实例
           const { db } = await import('../../lib/cloudbase');
 
           if (t1Event.importance >= 8) {
@@ -100,7 +100,6 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
               } catch(e) { return prev; }
             });
             
-            // 👑 完全使用你提供的文档语法：单条更新 T3 档案
             if (db && newT3Str) {
               try {
                 await db.collection('personas').doc(activeId).update({ content: newT3Str });
@@ -108,23 +107,16 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
             }
           }
 
-          // 👑 完全使用你提供的文档语法：单条新增记忆
           if (db) {
             try {
               await db.collection('persona_memories').add({
                 personaId: activeId,
-                text: `[用户] ${t1Event.summary}`, // 适配你图里的 text 格式
-                createTime: new Date()             // 适配你图里的 createTime 格式
+                text: `[用户] ${t1Event.summary}`,
+                createTime: new Date()
               });
               console.log("✅ 记忆已成功写入 TCB 数据库!");
             } catch (err) { console.error('记忆写入失败:', err); }
           }
-        }
-
-          await cloudbase.callFunction({
-            name: 'vectorize_memory',
-            data: { personaId: activeId, memories: [t1Event.summary] }
-          });
         }
       } catch (error) {
         console.warn("Flash 提取中断:", error.message);
@@ -251,12 +243,12 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
         handleSendMessage={handleSendMessage} 
       />
       
-     {showTasksModal && <TasksModal tasks={extractedTasks} onClose={() => setShowTasksModal(false)} />}
+      {showTasksModal && <TasksModal tasks={extractedTasks} onClose={() => setShowTasksModal(false)} />}
       {showMemoryCabin && (
         <MemoryCabin 
           activePersona={activePersona} 
-          setActivePersona={setActivePersona} // 👑 赋予透明舱修改全局状态的权限
-          showMsg={showMsg}                   // 👑 赋予透明舱弹窗提示的权限
+          setActivePersona={setActivePersona}
+          showMsg={showMsg}
           onClose={() => setShowMemoryCabin(false)} 
         />
       )}
