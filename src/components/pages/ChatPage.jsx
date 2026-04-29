@@ -232,8 +232,15 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
         handleSendMessage={handleSendMessage} 
       />
       
-      {showTasksModal && <TasksModal tasks={extractedTasks} onClose={() => setShowTasksModal(false)} />}
-      {showMemoryCabin && <MemoryCabin activePersona={activePersona} onClose={() => setShowMemoryCabin(false)} />}
+     {showTasksModal && <TasksModal tasks={extractedTasks} onClose={() => setShowTasksModal(false)} />}
+      {showMemoryCabin && (
+        <MemoryCabin 
+          activePersona={activePersona} 
+          setActivePersona={setActivePersona} // 👑 赋予透明舱修改全局状态的权限
+          showMsg={showMsg}                   // 👑 赋予透明舱弹窗提示的权限
+          onClose={() => setShowMemoryCabin(false)} 
+        />
+      )}
     </div>
   );
 }
