@@ -15,6 +15,19 @@ export default function MemoryCabin({ activePersona, setActivePersona, showMsg, 
     }
   });
 
+  // 👑 首席修复：监听外部状态变更，防止闪电通道更新被本组件的旧状态脏覆写
+  React.useEffect(() => {
+    if (!activePersona?.content) return;
+    try {
+      const freshData = JSON.parse(activePersona.content);
+      setT3Data(freshData);
+    } catch (e) {
+      console.error("透明舱同步外部状态失败:", e);
+    }
+  }, [activePersona?.content]);
+
+  // (你原有的 syncToCloud 等函数)
+
   // 👑 核心引擎：将前端修改一键同步至云端数据库与全局状态
   const syncToCloud = async (newData) => {
     setIsSaving(true);
