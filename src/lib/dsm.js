@@ -122,7 +122,10 @@ export function hasContentSignal(messages) {
     if (!messages || messages.length === 0) return false;
     const lastUserMsg = messages.filter(m => m.role === 'user').slice(-1)[0];
     if (!lastUserMsg) return false;
-    return SIGNAL_PATTERNS.some(p => p.test(lastUserMsg.content));
+    
+    // 👑 首席修复：兼容 React 状态里的 text 字段，避免守门人因 content 为 undefined 而静默失效
+    const messageContent = lastUserMsg.text || lastUserMsg.content || "";
+    return SIGNAL_PATTERNS.some(p => p.test(messageContent));
 }
 
 // ==========================================
