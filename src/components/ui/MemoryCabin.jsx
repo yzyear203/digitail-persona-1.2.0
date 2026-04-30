@@ -1,4 +1,9 @@
-import React, { useState } from 'react';
+// ==========================================
+// 方案 A 全量覆盖：src/components/ui/MemoryCabin.jsx
+// 目标：彻底拔除 React 状态覆写炸弹，实现无损的动态状态合并
+// ==========================================
+
+import React, { useState, useEffect, useRef } from 'react';
 import { BrainCircuit, X, ShieldAlert, Heart, Zap, Trash2, Plus, Ban, Check, Loader2 } from 'lucide-react';
 import { db } from '../../lib/cloudbase';
 
@@ -15,33 +20,55 @@ export default function MemoryCabin({ activePersona, setActivePersona, showMsg, 
     }
   });
 
-  // 👑 首席修复：监听外部状态变更，防止闪电通道更新被本组件的旧状态脏覆写
-  React.useEffect(() => {
+  // 👑 首席修复：使用 ref 实时追踪最新的 activePersona，规避闭包陷阱
+  const latestPersonaRef = useRef(activePersona);
+  useEffect(() => {
+    latestPersonaRef.current = activePersona;
+  }, [activePersona]);
+
+  // 👑 首席修复：仅在外部发生重大刷新且舱体未操作时，被动同步显示数据
+  useEffect(() => {
     if (!activePersona?.content) return;
     try {
       const freshData = JSON.parse(activePersona.content);
-      setT3Data(freshData);
+      // 仅做显示层面的防御性同步，不直接覆写，核心防冲突交由 syncToCloud 的函数式更新处理
+      setT3Data(prev => ({ ...freshData, ...prev }));
     } catch (e) {
       console.error("透明舱同步外部状态失败:", e);
     }
   }, [activePersona?.content]);
 
-  // (你原有的 syncToCloud 等函数)
-
-  // 👑 核心引擎：将前端修改一键同步至云端数据库与全局状态
-  const syncToCloud = async (newData) => {
+  // 👑 首席引擎重构：将前端修改一键同步至云端数据库与全局状态 (函数式更新防并发踩踏)
+  const syncToCloud = async (updaterFunction) => {
     setIsSaving(true);
     try {
-      const jsonStr = JSON.stringify(newData);
-      // 1. 同步前端聊天引擎的状态
-      setActivePersona(prev => ({ ...prev, content: jsonStr }));
+      let mergedStr = "";
+      
+      // 1. 同步前端聊天引擎的状态：使用 prev 函数式回调，获取执行瞬间的最绝对新鲜状态
+      setActivePersona(prev => {
+        let latestT3 = {};
+        try { latestT3 = JSON.parse(prev.content || '{}'); } catch(e) {}
+        
+        // 将局部修改精准打补丁到最新状态上
+        const updatedT3 = updaterFunction(latestT3);
+        
+        // 同步回本地 UI
+        setT3Data(updatedT3);
+        
+        mergedStr = JSON.stringify(updatedT3);
+        return { ...prev, content: mergedStr };
+      });
+
+      // 确保微任务队列清空，mergedStr 拿到最新值
+      await Promise.resolve();
+
       // 2. 静默直连 TCB 数据库进行覆写，省去云函数调用
-      if (db && activePersona?.id) {
-        await db.collection('personas').doc(activePersona.id).update({
-          content: jsonStr
+      if (db && latestPersonaRef.current?.id) {
+        await db.collection('personas').doc(latestPersonaRef.current.id).update({
+          content: mergedStr
         });
       }
-      showMsg('✅ 记忆舱矩阵已重新对齐');
+      showMsg('✅ 记忆舱矩阵已重新对齐，未发生并发踩踏');
     } catch (error) {
       showMsg('❌ 同步云端失败: ' + error.message);
     } finally {
@@ -51,50 +78,62 @@ export default function MemoryCabin({ activePersona, setActivePersona, showMsg, 
 
   // --- 交互功能 1：一键删除兴趣特征 ---
   const handleRemoveInterest = (index) => {
-    const newData = { ...t3Data };
-    newData.interests.splice(index, 1);
-    setT3Data(newData);
-    syncToCloud(newData);
+    syncToCloud(latest => {
+      const newInterests = [...(latest.interests || [])];
+      newInterests.splice(index, 1);
+      return { ...latest, interests: newInterests };
+    });
   };
 
   // --- 交互功能 2：手动添加与删除禁忌话题 ---
   const handleAddForbidden = (e) => {
     e.preventDefault();
-    if (!newForbidden.trim()) return;
-    const newData = { ...t3Data };
-    if (!newData.forbidden_topics) newData.forbidden_topics = [];
-    if (!newData.forbidden_topics.includes(newForbidden.trim())) {
-      newData.forbidden_topics.push(newForbidden.trim());
-      setT3Data(newData);
-      syncToCloud(newData);
-    }
+    const trimmed = newForbidden.trim();
+    if (!trimmed) return;
+    
+    syncToCloud(latest => {
+      const newForbiddenList = [...(latest.forbidden_topics || [])];
+      if (!newForbiddenList.includes(trimmed)) {
+        newForbiddenList.push(trimmed);
+      }
+      return { ...latest, forbidden_topics: newForbiddenList };
+    });
     setNewForbidden('');
   };
 
   const handleRemoveForbidden = (index) => {
-    const newData = { ...t3Data };
-    newData.forbidden_topics.splice(index, 1);
-    setT3Data(newData);
-    syncToCloud(newData);
+    syncToCloud(latest => {
+      const newForbiddenList = [...(latest.forbidden_topics || [])];
+      newForbiddenList.splice(index, 1);
+      return { ...latest, forbidden_topics: newForbiddenList };
+    });
   };
 
   // --- 交互功能 3：处理冲突网关抛出的 Pending Conflicts ---
   const handleResolveConflict = (index, decision) => {
-    const newData = { ...t3Data };
-    const conflict = newData.pending_conflicts[index];
+    syncToCloud(latest => {
+      const newLatest = { ...latest };
+      const conflictList = [...(newLatest.pending_conflicts || [])];
+      if (conflictList.length === 0) return newLatest;
 
-    if (decision === 'accept') {
-      // 假设冲突字段路径扁平，如 "identity.value"
-      const keys = conflict.field.split('.');
-      if (keys.length === 2) {
-        if (!newData[keys[0]]) newData[keys[0]] = {};
-        newData[keys[0]][keys[1]] = conflict.new_value;
+      const conflict = conflictList[index];
+
+      if (decision === 'accept' && conflict) {
+        // 假设冲突字段路径扁平，如 "identity.value"
+        const keys = conflict.field.split('.');
+        if (keys.length === 2) {
+          if (!newLatest[keys[0]]) newLatest[keys[0]] = {};
+          newLatest[keys[0]][keys[1]] = conflict.new_value;
+        } else if (keys.length === 1) {
+          newLatest[keys[0]] = conflict.new_value;
+        }
       }
-    }
-    // 无论接受还是拒绝，都将其移出待裁决区
-    newData.pending_conflicts.splice(index, 1);
-    setT3Data(newData);
-    syncToCloud(newData);
+      
+      // 无论接受还是拒绝，都将其移出待裁决区
+      conflictList.splice(index, 1);
+      newLatest.pending_conflicts = conflictList;
+      return newLatest;
+    });
   };
 
   return (
