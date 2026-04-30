@@ -1,5 +1,9 @@
-// src/lib/api.js
-import { cloudbase } from './cloudbase';
+// ==========================================
+// 方案 A 全量覆盖：src/lib/api.js
+// 目标：实装底层无感 Tool Call 拦截器，打通 T2 深态记忆回源闭环
+// ==========================================
+
+import { cloudbase, db } from './cloudbase';
 
 // ================== Doubao OCR 引擎 ==================
 export const callDoubaoAPI = async (promptText, systemInstructionText = null, imageParts = []) => {
@@ -39,7 +43,7 @@ export const callDeepSeekAPI = async (promptText, systemInstructionText = null, 
 
   const isPro = mode === 'pro';
 
-  // 🚀 核心升级：注入 AbortController 物理阻断机制
+  // 🚀 核心升级：注入 AbortController 物理阻断机制与底层 Tool Call 无感拦截器
   return new Promise(async (resolve, reject) => {
     // 注册防章鱼拦截监听器
     if (signal) {
@@ -48,14 +52,13 @@ export const callDeepSeekAPI = async (promptText, systemInstructionText = null, 
     }
 
     try {
-      // 注意：如果未来切换为 Fetch 直连大模型，只需在此处 fetch(url, { signal }) 即可实现真正的 GPU 毫秒级断连
-     const res = await cloudbase.callFunction({
+      const res = await cloudbase.callFunction({
         name: 'deepseek_generate',
         data: { 
           messages: apiMessages,
           model: isPro ? 'deepseek-v4-pro' : 'deepseek-v4-flash',
           useThinking: isPro,
-          personaId: personaId // 🚀 补上这一行，把 ID 传给云函数！
+          personaId: personaId 
         },
         timeout: isPro ? 60000 : 15000 
       });
@@ -65,7 +68,77 @@ export const callDeepSeekAPI = async (promptText, systemInstructionText = null, 
 
       const data = res.result;
       if (data && data.error) throw new Error(data.error.message || JSON.stringify(data.error));
-      resolve(data.choices?.[0]?.message?.content || "");
+      
+      let responseText = data.choices?.[0]?.message?.content || "";
+
+      // 👑 首席架构师防线：无感拦截 Tool Call 文本模式 (同时兼容蓝图的 retrieve_long_term_memory 与遗留的 search_subconscious_memory)
+      const toolRegex = /```json\s*(\{[\s\S]*?"tool_name"\s*:\s*"(retrieve_long_term_memory|search_subconscious_memory)"[\s\S]*?\})\s*```|\{\s*"tool_name"\s*:\s*"(retrieve_long_term_memory|search_subconscious_memory)"[\s\S]*?\}/;
+      const match = responseText.match(toolRegex);
+
+      if (match) {
+        const jsonStr = match[1] || match[0]; 
+        let toolCall;
+        try {
+          toolCall = JSON.parse(jsonStr);
+        } catch (e) {
+          console.warn("Tool Call JSON 解析失败，放行输出:", jsonStr);
+          return resolve(responseText);
+        }
+
+        console.log(`⚡ [DSM Tool Interceptor] 侦测到深态回源请求 [${toolCall.tool_name}]:`, toolCall.input?.query);
+
+        // 1. 直连 TCB 执行 T2 向量回源 (纯前端暂用倒排模糊匹配替代原生向量检索)
+        let toolResult = "[记忆库无相关记录]";
+        if (db) {
+          try {
+             const queryRes = await db.collection('persona_memories')
+               .where({ user_id: personaId })
+               .orderBy('timestamp', 'desc')
+               .limit(10)
+               .get();
+               
+             // 简易前端关键字提纯
+             const keywords = (toolCall.input?.query || "").split('').filter(k => k.trim());
+             const matchedMemories = queryRes.data.filter(m => {
+               if (!keywords.length) return true;
+               return keywords.some(kw => m.content?.includes(kw));
+             });
+
+             const finalMemories = matchedMemories.length > 0 ? matchedMemories : queryRes.data.slice(0, 3);
+             if (finalMemories.length > 0) {
+               toolResult = `[深层记忆回源数据]:\n` + finalMemories.map(m => `- ${m.content}`).join('\n');
+             }
+          } catch (dbErr) {
+             console.error("TCB 深态记忆库检索失败:", dbErr);
+             toolResult = "[记忆检索系统暂时离线]";
+          }
+        }
+
+        // 2. 擦除原始返回内容中的 JSON 暴露物，并将结果回传给大模型进行二跳 (Second Hop)
+        apiMessages.push({ role: "assistant", content: responseText });
+        apiMessages.push({ role: "user", content: `系统工具执行完毕。检索结果如下:\n${toolResult}\n\n请结合上述深层记忆，继续极其自然地回答我刚才的问题。绝对禁止再次输出任何工具 JSON 结构。` });
+
+        const secondRes = await cloudbase.callFunction({
+            name: 'deepseek_generate',
+            data: { 
+              messages: apiMessages, 
+              model: isPro ? 'deepseek-v4-pro' : 'deepseek-v4-flash', 
+              useThinking: isPro, 
+              personaId 
+            },
+            timeout: isPro ? 60000 : 15000 
+        });
+
+        if (signal && signal.aborted) return reject(new DOMException('Aborted', 'AbortError'));
+        
+        const secondData = secondRes.result;
+        if (secondData && secondData.error) throw new Error(secondData.error.message || JSON.stringify(secondData.error));
+        
+        // 将模型融合记忆后的最终答案返回给上层 UI
+        responseText = secondData.choices?.[0]?.message?.content || "";
+      }
+
+      resolve(responseText);
     } catch (e) {
       reject(new Error(`DeepSeek 引擎宕机: ${e.message}`));
     }
