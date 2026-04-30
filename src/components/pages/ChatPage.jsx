@@ -70,54 +70,69 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
           .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.replace(/<del>.*?<\/del>|<\/?recall>|\[quote:.*?\]/g, '')}`)
           .join('\n');
 
+        // 👑 首席修复：补充 emotion 和 confidence 字段要求，搭建情绪隔离罩地基
         const prompt = `分析以下最新对话，提取极具价值的【增量记忆】。
 严禁提取无意义的日常，必须以第三人称陈述。
 【重要性打分规则】：日常小事0-3，明确计划4-7，重大人生事件（如拿到offer、失恋、生病、离职）必须打 8 到 10 分！
 严格按下方JSON输出（不要包含markdown格式）：
-{ "importance": 9, "summary": "用户今天拿到了字节跳动的Offer" }
-如果没有硬核信息，importance 填 0。
+{ "importance": 9, "summary": "用户今天拿到了字节跳动的Offer", "emotion": "excited", "confidence": "high" }
+其中 emotion 从 [happy, sad, neutral, excited, frustrated, anxious] 中选，confidence 从 [high, medium, low] 中选。如果没有硬核信息，importance 填 0。
 对话：\n${historyForExtraction}`;
 
         const resJSONStr = await callDeepSeekAPI(prompt, "你是一个只输出合法JSON的机器。", "flash", null, activeId);
         
-        let t1Event = { importance: 0, summary: "" };
+        let t1Event = { importance: 0, summary: "", emotion: "neutral", confidence: "high" };
         try { t1Event = JSON.parse(resJSONStr.replace(/```json|```/g, '').trim()); } catch (e) { return; }
 
        if (t1Event.importance > 0 && t1Event.summary) {
-          saveToHotT1Cache(activeId, t1Event.summary);
-          
-          const { db } = await import('../../lib/cloudbase');
+         saveToHotT1Cache(activeId, t1Event.summary);
+         
+         const { db } = await import('../../lib/cloudbase');
 
-          if (t1Event.importance >= 8) {
-            showMsg(`⚡ 闪电更新：已感知到重大事件 [${t1Event.summary}]`);
-            let newT3Str = "";
-            setActivePersona(prev => {
-              try {
-                const t3 = JSON.parse(prev.content);
-                t3.current_context = { value: t1Event.summary, expires_at: new Date(Date.now() + 7*24*3600*1000).toISOString() };
-                newT3Str = JSON.stringify(t3);
-                return { ...prev, content: newT3Str };
-              } catch(e) { return prev; }
-            });
-            
-            if (db && newT3Str) {
-              try {
-                await db.collection('personas').doc(activeId).update({ content: newT3Str });
-              } catch (err) { console.error('T3档案更新失败:', err); }
-            }
-          }
+         if (t1Event.importance >= 8) {
+           showMsg(`⚡ 闪电更新：已感知到重大事件 [${t1Event.summary}]`);
+           let newT3Str = "";
+           setActivePersona(prev => {
+             try {
+               const t3 = JSON.parse(prev.content);
+               t3.current_context = { value: t1Event.summary, expires_at: new Date(Date.now() + 7*24*3600*1000).toISOString() };
+               newT3Str = JSON.stringify(t3);
+               return { ...prev, content: newT3Str };
+             } catch(e) { return prev; }
+           });
+           
+           if (db && newT3Str) {
+             try {
+               await db.collection('personas').doc(activeId).update({ content: newT3Str });
+             } catch (err) { console.error('T3档案更新失败:', err); }
+           }
+         }
 
-          if (db) {
-            try {
-              await db.collection('persona_memories').add({
-                personaId: activeId,
-                text: `[用户] ${t1Event.summary}`,
-                createTime: new Date()
-              });
-              console.log("✅ 记忆已成功写入 TCB 数据库!");
-            } catch (err) { console.error('记忆写入失败:', err); }
-          }
-        }
+         if (db) {
+           try {
+             // 👑 首席修复：补齐 TCB 记忆落盘缺失的 7 大核心字段及防并发 idempotency_key
+             const currentTimestamp = Date.now();
+             const timeFloor10s = Math.floor(currentTimestamp / 10000) * 10000; 
+             const idempotencyKeyRaw = `sess_active_${timeFloor10s}_${activeId}`;
+             const idempotencyKey = btoa(encodeURIComponent(idempotencyKeyRaw)).substring(0, 64);
+
+             await db.collection('persona_memories').add({
+               event_id: `evt_${currentTimestamp}`,
+               user_id: activeId,
+               content: t1Event.summary,
+               importance_score: t1Event.importance,
+               emotion: t1Event.emotion || "neutral",
+               confidence: t1Event.confidence || "high",
+               timestamp: new Date().toISOString(),
+               session_id: "sess_active", 
+               device_fingerprint: navigator.userAgent.substring(0, 32),
+               idempotency_key: idempotencyKey,
+               createTime: new Date()
+             });
+             console.log("✅ T1 深态记忆已成功写入 TCB 数据库并应用结构化规范!");
+           } catch (err) { console.error('记忆写入失败:', err); }
+         }
+       }
       } catch (error) {
         console.warn("Flash 提取中断:", error.message);
       }
@@ -148,6 +163,20 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
       return [...filtered, { id: currentNonce, role: 'user', text: userText, time: new Date().toLocaleTimeString() }];
     });
 
+    // 👑 首席修复：重置 T3 last_chat_time，防止回归感知无限触发
+    try {
+      const t3 = JSON.parse(activePersona.content || '{}');
+      if (t3.relationship) {
+        t3.relationship.last_chat_time = new Date().toISOString();
+        const updatedContent = JSON.stringify(t3);
+        setActivePersona(prev => ({ ...prev, content: updatedContent }));
+        
+        import('../../lib/cloudbase').then(({ db }) => {
+            if (db) db.collection('personas').doc(activeId).update({ content: updatedContent }).catch(() => {});
+        });
+      }
+    } catch(err) { console.warn("更新最后聊天时间失败", err); }
+
     setIsTypingIndicator(true);
     if (extractTimerRef.current) clearTimeout(extractTimerRef.current);
 
@@ -173,8 +202,8 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
       if (generationNonce.current !== currentNonce) return;
       if (responseText.includes('[SILENCE]')) { setIsTypingIndicator(false); return; }
 
-      // 👑 首席修复：移除 \n+ 切割，防止长文和代码块排版碎裂，仅靠特殊标识符分割多气泡
-      const replyParts = responseText.split(/\|\|\||-{3,}|={3,}/).map(s => s.trim()).filter(s => s);
+      // 👑 首席修复：彻底移除 - 和 = 切割，防止长文、代码块、Markdown 表格被行刑式打碎。强制只用 ||| 作为唯一分隔符。
+      const replyParts = responseText.split(/\|\|\|/).map(s => s.trim()).filter(s => s);
       setIsTypingIndicator(false);
       
       for (let i = 0; i < replyParts.length; i++) {
