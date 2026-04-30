@@ -173,7 +173,8 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
       if (generationNonce.current !== currentNonce) return;
       if (responseText.includes('[SILENCE]')) { setIsTypingIndicator(false); return; }
 
-      const replyParts = responseText.split(/\|\|\||-{3,}|={3,}|\n+/).map(s => s.trim()).filter(s => s);
+      // 👑 首席修复：移除 \n+ 切割，防止长文和代码块排版碎裂，仅靠特殊标识符分割多气泡
+      const replyParts = responseText.split(/\|\|\||-{3,}|={3,}/).map(s => s.trim()).filter(s => s);
       setIsTypingIndicator(false);
       
       for (let i = 0; i < replyParts.length; i++) {
