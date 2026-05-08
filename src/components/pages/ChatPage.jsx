@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { Quote, X } from 'lucide-react';
 import ChatHeader from '../chat/ChatHeader';
 import ChatMessageList from '../chat/ChatMessageList';
 import ChatInput from '../chat/ChatInput';
@@ -58,6 +59,11 @@ function extractDeclaredUserName(text) {
 
 function stripControlMarkers(text) {
   return String(text || '').replace(CONTROL_MARKER_REGEX, '').trim();
+}
+
+function buildQuoteMarker(text) {
+  const cleanText = stripControlMarkers(text).replace(/\s+/g, ' ').trim();
+  return cleanText.slice(0, 36).replace(/[\[\]]/g, '') || '这条消息';
 }
 
 function getLastUserQuote(messagesSnapshot) {
@@ -135,6 +141,9 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   const [showTasksModal, setShowTasksModal] = useState(false);
   const [showMemoryCabin, setShowMemoryCabin] = useState(false);
   const [showAppearanceModal, setShowAppearanceModal] = useState(false);
+  const [quotedMessage, setQuotedMessage] = useState(null);
+  const [isSelectingUserMessages, setIsSelectingUserMessages] = useState(false);
+  const [selectedUserMessageIds, setSelectedUserMessageIds] = useState(() => new Set());
   const [extractedTasks, setExtractedTasks] = useState([]);
   const [isExtracting, setIsExtracting] = useState(false);
 
@@ -162,6 +171,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
         backgroundPosition: 'center',
       }
     : undefined;
+  const quotedText = quotedMessage ? buildQuoteMarker(quotedMessage.text) : '';
 
   const clearPendingResponseTimer = () => {
     if (pendingResponseTimerRef.current) {
@@ -185,6 +195,9 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
 
   useEffect(() => {
     setChatAppearance(getStoredChatAppearance(activeId));
+    setQuotedMessage(null);
+    setIsSelectingUserMessages(false);
+    setSelectedUserMessageIds(new Set());
   }, [activeId]);
 
   useEffect(() => {
@@ -219,6 +232,27 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isTypingIndicator]);
+
+  useEffect(() => {
+    if (quotedMessage && !messages.some(message => message.id === quotedMessage.id && !message.isRecalled)) {
+      setQuotedMessage(null);
+    }
+  }, [messages, quotedMessage]);
+
+  useEffect(() => {
+    setSelectedUserMessageIds(prev => {
+      if (!prev.size) return prev;
+      const validIds = new Set(
+        messages
+          .filter(message => message.role === 'user' && !message.isRecalled && stripControlMarkers(message.text))
+          .map(message => message.id)
+      );
+      const next = new Set([...prev].filter(id => validIds.has(id)));
+      if (next.size === prev.size) return prev;
+      if (next.size === 0) setIsSelectingUserMessages(false);
+      return next;
+    });
+  }, [messages]);
 
   useEffect(() => {
     if (isTypingIndicator) return;
@@ -436,6 +470,62 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     }
   };
 
+  const handleQuoteMessage = (message) => {
+    if (!message || message.isRecalled) return;
+    setQuotedMessage({ id: message.id, role: message.role, text: message.text });
+    setIsSelectingUserMessages(false);
+    setSelectedUserMessageIds(new Set());
+  };
+
+  const handleRecallUserMessage = (messageId) => {
+    setMessages(prev => prev.map(message => (
+      message.id === messageId && message.role === 'user'
+        ? { ...message, isRecalled: true, text: stripControlMarkers(message.text) }
+        : message
+    )));
+    setSelectedUserMessageIds(prev => {
+      const next = new Set(prev);
+      next.delete(messageId);
+      if (next.size === 0) setIsSelectingUserMessages(false);
+      return next;
+    });
+    if (quotedMessage?.id === messageId) setQuotedMessage(null);
+  };
+
+  const handleStartUserMessageSelection = (messageId) => {
+    setIsSelectingUserMessages(true);
+    setSelectedUserMessageIds(new Set([messageId]));
+    setQuotedMessage(null);
+  };
+
+  const handleToggleUserMessageSelection = (messageId) => {
+    setSelectedUserMessageIds(prev => {
+      const next = new Set(prev);
+      if (next.has(messageId)) next.delete(messageId);
+      else next.add(messageId);
+      if (next.size === 0) setIsSelectingUserMessages(false);
+      return next;
+    });
+  };
+
+  const handleCancelUserMessageSelection = () => {
+    setIsSelectingUserMessages(false);
+    setSelectedUserMessageIds(new Set());
+  };
+
+  const handleRecallSelectedUserMessages = () => {
+    if (!selectedUserMessageIds.size) return;
+    const idsToRecall = new Set(selectedUserMessageIds);
+    setMessages(prev => prev.map(message => (
+      idsToRecall.has(message.id) && message.role === 'user'
+        ? { ...message, isRecalled: true, text: stripControlMarkers(message.text) }
+        : message
+    )));
+    if (quotedMessage && idsToRecall.has(quotedMessage.id)) setQuotedMessage(null);
+    setIsSelectingUserMessages(false);
+    setSelectedUserMessageIds(new Set());
+  };
+
   const persistDeclaredUserName = (userName) => {
     if (!userName) return;
 
@@ -484,6 +574,9 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
 
     const currentNonce = Date.now();
     generationNonce.current = currentNonce;
+    const messageText = quotedMessage
+      ? `[quote: ${buildQuoteMarker(quotedMessage.text)}]${userText}`
+      : userText;
 
     clearPendingResponseTimer();
     pendingResponseNonceRef.current = null;
@@ -499,8 +592,11 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
 
     setMessages(prev => {
       const filtered = prev.filter(m => !(m.role === 'assistant' && m.isAnimated));
-      return [...filtered, { id: currentNonce, role: 'user', text: userText, time: new Date().toLocaleTimeString() }];
+      return [...filtered, { id: currentNonce, role: 'user', text: messageText, time: new Date().toLocaleTimeString() }];
     });
+    setQuotedMessage(null);
+    setIsSelectingUserMessages(false);
+    setSelectedUserMessageIds(new Set());
 
     try {
       const t3 = JSON.parse(activePersonaRef.current?.content || '{}');
@@ -538,6 +634,9 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     if (extractTimerRef.current) clearTimeout(extractTimerRef.current);
     resolvePendingTypingAnimations();
     setIsTypingIndicator(false);
+    setQuotedMessage(null);
+    setIsSelectingUserMessages(false);
+    setSelectedUserMessageIds(new Set());
 
     localStorage.removeItem(chatKey);
     setMessages([
@@ -595,11 +694,37 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
           activePersona={activePersona}
           messagesEndRef={messagesEndRef}
           chatAppearance={chatAppearance}
+          onQuoteMessage={handleQuoteMessage}
+          onRecallUserMessage={handleRecallUserMessage}
+          isSelectingUserMessages={isSelectingUserMessages}
+          selectedUserMessageIds={selectedUserMessageIds}
+          onToggleUserMessageSelection={handleToggleUserMessageSelection}
+          onStartUserMessageSelection={handleStartUserMessageSelection}
+          onCancelUserMessageSelection={handleCancelUserMessageSelection}
+          onRecallSelectedUserMessages={handleRecallSelectedUserMessages}
           onAssistantAnimationComplete={messageId => {
             const resolve = typingResolversRef.current.get(messageId);
             if (resolve) resolve();
           }}
         />
+
+        {quotedMessage && (
+          <div className={`mx-auto mb-2 w-[min(56rem,calc(100%-2rem))] rounded-2xl border px-4 py-3 shadow-sm flex items-center gap-3 ${isDarkChat ? 'bg-slate-900/95 border-slate-700 text-slate-200' : 'bg-white/95 border-slate-200 text-slate-700'}`}>
+            <Quote size={16} className="shrink-0 text-emerald-500" />
+            <div className="min-w-0 flex-1">
+              <div className="text-xs font-black text-emerald-600 mb-0.5">正在引用{quotedMessage.role === 'user' ? '你的消息' : '对方消息'}</div>
+              <div className="text-sm font-semibold truncate">{quotedText}</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setQuotedMessage(null)}
+              className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 transition-colors"
+              aria-label="取消引用"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        )}
 
         <ChatInput
           input={input}
