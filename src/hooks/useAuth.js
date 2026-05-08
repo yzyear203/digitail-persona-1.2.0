@@ -20,7 +20,7 @@ async function ensureUserDoc(uid, nickname = '') {
 
 export function useAuth(setAppPhase, showMsg) {
   const [authMethod, setAuthMethod] = useState('email');
-  const [isLoginMode, setIsLoginMode] = useState(false);
+  const [isLoginMode, setIsLoginMode] = useState(true);
   const [nickname, setNickname] = useState('');
   const [account, setAccount] = useState('');
   const [password, setPassword] = useState('');
@@ -81,6 +81,15 @@ export function useAuth(setAppPhase, showMsg) {
     }
   };
 
+  const resetAuthFormForMode = (nextLoginMode) => {
+    setIsLoginMode(nextLoginMode);
+    setAuthError('');
+    setVerificationCode('');
+    setVerificationId('');
+    setConfirmPassword('');
+    setCountdown(0);
+  };
+
   const handleAuthSubmit = async (e) => {
     e.preventDefault();
     setAuthError('');
@@ -131,13 +140,14 @@ export function useAuth(setAppPhase, showMsg) {
   };
 
   const handleLogout = async () => { 
-    await auth.signOut(); 
-    setAppPhase('home'); 
+    await auth.signOut();
+    resetAuthFormForMode(true);
+    setAppPhase('auth'); 
   };
 
   return {
     authMethod, setAuthMethod,
-    isLoginMode, setIsLoginMode,
+    isLoginMode, setIsLoginMode: resetAuthFormForMode,
     nickname, setNickname,
     account, setAccount,
     password, setPassword,
