@@ -19,6 +19,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   const abortControllerRef = useRef(null);
   const messagesEndRef = useRef(null);
   const extractTimerRef = useRef(null);
+  const typingResolversRef = useRef(new Map());
 
   const activeId = activePersona?.id || 'default';
   const chatKey = `chat_history_${activeId}`;
@@ -219,14 +220,21 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
       for (let i = 0; i < replyParts.length; i++) {
         if (generationNonce.current !== currentNonce) break;
 
+        const messageId = Date.now() + i;
+        const waitForTyping = new Promise(resolve => {
+          typingResolversRef.current.set(messageId, resolve);
+        });
+
         setMessages(prev => [
           ...prev,
-          { id: Date.now() + i, role: 'assistant', text: replyParts[i], time: new Date().toLocaleTimeString(), isAnimated: true }
+          { id: messageId, role: 'assistant', text: replyParts[i], time: new Date().toLocaleTimeString(), isAnimated: true }
         ]);
 
+        await waitForTyping;
+        typingResolversRef.current.delete(messageId);
+
         if (i < replyParts.length - 1) {
-          await new Promise(resolve => { window.__typingResolve = resolve; });
-          await new Promise(r => setTimeout(r, 600));
+          await new Promise(r => setTimeout(r, 420));
         }
       }
     } catch (error) {
@@ -279,6 +287,10 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
         setMessages={setMessages}
         activePersona={activePersona}
         messagesEndRef={messagesEndRef}
+        onAssistantAnimationComplete={messageId => {
+          const resolve = typingResolversRef.current.get(messageId);
+          if (resolve) resolve();
+        }}
       />
 
       <ChatInput
