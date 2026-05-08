@@ -21,6 +21,11 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   const extractTimerRef = useRef(null);
   const typingResolversRef = useRef(new Map());
 
+  const resolvePendingTypingAnimations = () => {
+    typingResolversRef.current.forEach(resolve => resolve());
+    typingResolversRef.current.clear();
+  };
+
   const activeId = activePersona?.id || 'default';
   const chatKey = `chat_history_${activeId}`;
 
@@ -164,10 +169,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     const currentNonce = Date.now();
     generationNonce.current = currentNonce;
 
-    if (window.__typingResolve) {
-      window.__typingResolve();
-      window.__typingResolve = null;
-    }
+    resolvePendingTypingAnimations();
 
     setMessages(prev => {
       const filtered = prev.filter(m => !(m.role === 'assistant' && m.isAnimated));
@@ -227,7 +229,14 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
 
         setMessages(prev => [
           ...prev,
-          { id: messageId, role: 'assistant', text: replyParts[i], time: new Date().toLocaleTimeString(), isAnimated: true }
+          {
+            id: messageId,
+            role: 'assistant',
+            text: replyParts[i],
+            time: new Date().toLocaleTimeString(),
+            isAnimated: true,
+            typingPersona: activePersona?.content || ''
+          }
         ]);
 
         await waitForTyping;

@@ -232,23 +232,25 @@ export function applyBudgetAllocator(messages, sysPromptTokens, maxBudget = 4000
 // ==========================================
 // 8. Assistant 回复保真与气泡拆分
 // ==========================================
-function isStructuredOrCodeReply(text) {
-    return /```|^\s{0,3}#{1,6}\s|^\s{0,3}[-*+]\s|^\s{0,3}\d+\.\s|\|[^\n]+\|/m.test(text);
+function normalizeReplyText(text) {
+    return String(text || '')
+        .replace(/\r\n/g, '\n')
+        .replace(/\\n/g, '\n')
+        .trim();
 }
 
-function hasInteractiveTypingMarker(text) {
-    return /<del>[\s\S]*?<\/del>|<\/?recall>|\[quote:.*?\]/.test(text);
+function isStructuredOrCodeReply(text) {
+    return /```|^\s{0,3}#{1,6}\s|^\s{0,3}[-*+]\s|^\s{0,3}\d+\.\s|\|[^\n]+\|/m.test(text);
 }
 
 function hasOnlyControlMarker(text) {
     return !text.replace(/<\/?recall>|\[quote:.*?\]|<del>[\s\S]*?<\/del>/g, '').trim();
 }
 
-function splitByExplicitSeparators(text) {
-    const rawParts = text.split(/\|\|\|/).map(part => part.trim()).filter(Boolean);
+function mergeControlOnlyParts(parts) {
     const mergedParts = [];
 
-    for (const part of rawParts) {
+    for (const part of parts) {
         if (hasOnlyControlMarker(part) && mergedParts.length === 0) {
             mergedParts.push(part);
         } else if (mergedParts.length > 0 && hasOnlyControlMarker(mergedParts[mergedParts.length - 1])) {
@@ -261,24 +263,50 @@ function splitByExplicitSeparators(text) {
     return mergedParts;
 }
 
+function splitByExplicitSeparators(text) {
+    const rawParts = text.split(/\|\|\|/).map(part => part.trim()).filter(Boolean);
+    return mergeControlOnlyParts(rawParts);
+}
+
+function protectDeleteSpans(text) {
+    const spans = [];
+    const protectedText = text.replace(/<del>[\s\S]*?<\/del>/g, span => {
+        const token = `@@DSM_DEL_${spans.length}@@`;
+        spans.push(span);
+        return token;
+    });
+
+    return {
+        protectedText,
+        restore: value => spans.reduce((result, span, index) => result.replace(`@@DSM_DEL_${index}@@`, span), value),
+    };
+}
+
+function splitByParagraphsPreservingMarkers(text) {
+    const { protectedText, restore } = protectDeleteSpans(text);
+    const paragraphParts = protectedText
+        .split(/(?:\n\s*){2,}/)
+        .map(part => restore(part).trim())
+        .filter(Boolean);
+
+    if (paragraphParts.length <= 1) return [text];
+
+    const mergedParts = mergeControlOnlyParts(paragraphParts);
+    const shouldSplitByParagraph = mergedParts.every(part => part.length <= 220) && mergedParts.length <= 4;
+    return shouldSplitByParagraph ? mergedParts : [text];
+}
+
 export function splitAssistantReply(responseText) {
-    const cleanedText = String(responseText || '').trim();
+    const cleanedText = normalizeReplyText(responseText);
     if (!cleanedText) return [];
 
     if (cleanedText.includes('|||')) {
         return splitByExplicitSeparators(cleanedText);
     }
 
-    // 删除、引用、撤回依赖原始标记和后续正文处在同一个消息里，不能按空行自动拆散。
-    if (hasInteractiveTypingMarker(cleanedText)) return [cleanedText];
-
     if (isStructuredOrCodeReply(cleanedText)) return [cleanedText];
 
-    const paragraphParts = cleanedText.split(/\n{2,}/).map(part => part.trim()).filter(Boolean);
-    if (paragraphParts.length <= 1) return [cleanedText];
-
-    const shouldSplitByParagraph = paragraphParts.every(part => part.length <= 220) && paragraphParts.length <= 4;
-    return shouldSplitByParagraph ? paragraphParts : [cleanedText];
+    return splitByParagraphsPreservingMarkers(cleanedText);
 }
 
 // ==========================================

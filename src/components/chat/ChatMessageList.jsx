@@ -55,7 +55,7 @@ export default function ChatMessageList({
                   {m.role === 'assistant' && m.isAnimated ? (
                     <TypingText
                       content={actualText}
-                      persona={activePersona?.content || ''}
+                      persona={m.typingPersona || activePersona?.content || ''}
                       scrollRef={messagesEndRef}
                       onComplete={() => {
                         if (isRecallMsg) {

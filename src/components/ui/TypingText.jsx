@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { memo, useEffect, useRef } from 'react';
 
 function toCharacters(text) {
   const source = String(text || '');
@@ -67,7 +67,7 @@ function getTypeDelay(char, baseSpeed, typedCount) {
   return Math.max(16, delay);
 }
 
-export default function TypingText({ content, persona, onComplete, scrollRef, speed, deleteSpeed }) {
+function TypingText({ content, persona, onComplete, scrollRef, speed, deleteSpeed }) {
   const textRef = useRef(null);
   const cursorRef = useRef(null);
   const textNodeRef = useRef(null);
@@ -213,3 +213,13 @@ export default function TypingText({ content, persona, onComplete, scrollRef, sp
     </span>
   );
 }
+
+function areTypingPropsEqual(prev, next) {
+  return prev.content === next.content
+    && prev.persona === next.persona
+    && prev.scrollRef === next.scrollRef
+    && prev.speed === next.speed
+    && prev.deleteSpeed === next.deleteSpeed;
+}
+
+export default memo(TypingText, areTypingPropsEqual);
