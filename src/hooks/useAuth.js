@@ -1,6 +1,23 @@
 import { useState, useEffect } from 'react';
 import { auth, db } from '../lib/cloudbase';
 
+
+async function ensureUserDoc(uid, nickname = '') {
+  if (!db || !uid) return null;
+  const uidString = String(uid);
+  const res = await db.collection('users').where({ uid: uidString }).limit(1).get();
+  if (res.data?.length) return res.data[0];
+
+  const newUser = {
+    uid: uidString,
+    nickname: nickname || '未命名用户',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  await db.collection('users').add(newUser);
+  return newUser;
+}
+
 export function useAuth(setAppPhase, showMsg) {
   const [authMethod, setAuthMethod] = useState('email');
   const [isLoginMode, setIsLoginMode] = useState(false);
@@ -30,8 +47,8 @@ export function useAuth(setAppPhase, showMsg) {
         const uid = loginState.user?.uid || loginState.uid;
         setUser({ uid });
         try {
-          const res = await db.collection('users').where({ uid: String(uid) }).get();
-          if (res.data && res.data.length > 0) setUserProfile(res.data[0]);
+          const profile = await ensureUserDoc(uid, loginState.user?.name || loginState.user?.nickName || '');
+          if (profile) setUserProfile(profile);
         } catch (error) {
           console.error("获取用户信息失败", error);
         }
