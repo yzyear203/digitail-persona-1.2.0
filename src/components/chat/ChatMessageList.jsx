@@ -1,5 +1,5 @@
-import React from 'react';
-import { Quote, UserCircle } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Quote, RotateCcw, UserCircle, X } from 'lucide-react';
 import TypingText from '../ui/TypingText';
 
 function Avatar({ src, label, isUser, isDark }) {
@@ -14,6 +14,13 @@ function Avatar({ src, label, isUser, isDark }) {
   );
 }
 
+function cleanMessageText(text) {
+  return String(text || '')
+    .replace(/<\/?recall>|\[quote:.*?\]/g, '')
+    .replace(/<del>.*?<\/del>/g, '')
+    .trim();
+}
+
 export default function ChatMessageList({
   messages,
   setMessages,
@@ -21,7 +28,9 @@ export default function ChatMessageList({
   messagesEndRef,
   onAssistantAnimationComplete,
   chatAppearance,
+  onQuoteMessage,
 }) {
+  const [contextMenu, setContextMenu] = useState(null);
   const isDark = chatAppearance?.theme === 'dark';
   const assistantAvatar = activePersona?.avatarUrl || '';
   const userAvatar = chatAppearance?.userAvatar || '';
@@ -30,6 +39,56 @@ export default function ChatMessageList({
   const recallClass = isDark
     ? 'text-slate-300 bg-slate-800/80 border border-slate-700'
     : 'text-slate-500 bg-slate-200/60';
+  const menuClass = isDark
+    ? 'bg-slate-900 border-slate-700 text-slate-100 shadow-black/30'
+    : 'bg-white border-slate-200 text-slate-700 shadow-slate-300/50';
+
+  useEffect(() => {
+    const closeMenu = () => setContextMenu(null);
+    window.addEventListener('click', closeMenu);
+    window.addEventListener('scroll', closeMenu, true);
+    return () => {
+      window.removeEventListener('click', closeMenu);
+      window.removeEventListener('scroll', closeMenu, true);
+    };
+  }, []);
+
+  const openContextMenu = (event, message) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (message.isAnimated || message.isRecalled) return;
+    const text = cleanMessageText(message.text);
+    if (!text) return;
+
+    const menuWidth = 168;
+    const menuHeight = 104;
+    const x = Math.min(event.clientX, window.innerWidth - menuWidth - 12);
+    const y = Math.min(event.clientY, window.innerHeight - menuHeight - 12);
+
+    setContextMenu({
+      x: Math.max(12, x),
+      y: Math.max(12, y),
+      message: { ...message, cleanText: text },
+    });
+  };
+
+  const handleQuote = () => {
+    if (!contextMenu?.message) return;
+    onQuoteMessage?.({
+      id: contextMenu.message.id,
+      role: contextMenu.message.role,
+      text: contextMenu.message.cleanText,
+    });
+    setContextMenu(null);
+  };
+
+  const handleRecall = () => {
+    if (!contextMenu?.message) return;
+    const targetId = contextMenu.message.id;
+    setMessages(prev => prev.map(msg => msg.id === targetId ? { ...msg, isAnimated: false, isRecalled: true } : msg));
+    setContextMenu(null);
+  };
 
   return (
     <main className={`flex-1 overflow-y-auto p-4 md:p-8 ${mainClass}`}>
@@ -70,7 +129,7 @@ export default function ChatMessageList({
             {m.isRecalled ? (
               <div className="flex justify-center my-4">
                 <span className={`text-xs font-medium px-3 py-1 rounded-md ${recallClass}`}>
-                  "对方" 撤回了一条消息
+                  {isUser ? '你' : '"对方"'} 撤回了一条消息
                 </span>
               </div>
             ) : (
@@ -79,7 +138,10 @@ export default function ChatMessageList({
                   <Avatar src={assistantAvatar} label={activePersona?.name || 'Persona'} isUser={false} isDark={isDark} />
                 )}
 
-                <div className={`max-w-[72%] px-5 py-3.5 rounded-2xl shadow-sm text-[15px] font-medium leading-relaxed ${bubbleClass}`}>
+                <div
+                  onContextMenu={event => openContextMenu(event, m)}
+                  className={`max-w-[72%] px-5 py-3.5 rounded-2xl shadow-sm text-[15px] font-medium leading-relaxed cursor-default select-text ${bubbleClass}`}
+                >
                   {quoteText && (
                     <div className={`mb-2 p-2 rounded-lg border-l-4 text-xs flex items-start gap-2 italic ${quoteClass}`}>
                       <Quote size={12} className="shrink-0 mt-0.5" />
@@ -116,6 +178,37 @@ export default function ChatMessageList({
           </React.Fragment>
         );
       })}
+
+      {contextMenu && (
+        <div
+          className={`fixed z-[140] w-40 rounded-2xl border p-2 shadow-2xl ${menuClass}`}
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onClick={event => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            onClick={handleQuote}
+            className="w-full px-3 py-2.5 rounded-xl text-sm font-black flex items-center gap-2 hover:bg-emerald-50 hover:text-emerald-600 transition-colors"
+          >
+            <Quote size={15} /> 引用消息
+          </button>
+          <button
+            type="button"
+            onClick={handleRecall}
+            className="w-full px-3 py-2.5 rounded-xl text-sm font-black flex items-center gap-2 hover:bg-red-50 hover:text-red-600 transition-colors"
+          >
+            <RotateCcw size={15} /> 撤回消息
+          </button>
+          <button
+            type="button"
+            onClick={() => setContextMenu(null)}
+            className="w-full px-3 py-2.5 rounded-xl text-sm font-black flex items-center gap-2 hover:bg-slate-100 transition-colors"
+          >
+            <X size={15} /> 取消
+          </button>
+        </div>
+      )}
+
       <div ref={messagesEndRef} className="h-4"/>
     </main>
   );
