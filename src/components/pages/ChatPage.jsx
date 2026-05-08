@@ -60,6 +60,22 @@ function persistChatAppearance(activeId, accountId, appearance) {
   localStorage.setItem('chat_appearance_global', JSON.stringify(appearance));
 }
 
+async function fetchCloudUserAvatar(accountId) {
+  if (!db || !accountId) return '';
+
+  try {
+    const usersRes = await db.collection('users').where({ uid: String(accountId) }).limit(1).get();
+    const usersAvatar = usersRes.data?.[0]?.avatarUrl || usersRes.data?.[0]?.user_avatar || '';
+    if (usersAvatar) return usersAvatar;
+
+    const profileRes = await db.collection('user_profile').where({ user_id: String(accountId) }).limit(1).get();
+    return profileRes.data?.[0]?.avatarUrl || profileRes.data?.[0]?.user_avatar || '';
+  } catch (error) {
+    console.warn('读取云端我方头像失败:', error);
+    return '';
+  }
+}
+
 function extractDeclaredUserName(text) {
   const normalizedText = String(text || '').trim();
   const patterns = [
@@ -196,6 +212,20 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   useEffect(() => {
     setChatAppearance(getStoredChatAppearance(activeId, accountId));
   }, [activeId, accountId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!accountId) return undefined;
+
+    fetchCloudUserAvatar(accountId).then(cloudAvatar => {
+      if (cancelled || !cloudAvatar) return;
+      setChatAppearance(prev => prev.userAvatar === cloudAvatar ? prev : { ...prev, userAvatar: cloudAvatar });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accountId]);
 
   useEffect(() => {
     try {
@@ -600,6 +630,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
             setChatAppearance={setChatAppearance}
             showMsg={showMsg}
             onClose={() => setShowAppearanceModal(false)}
+            accountId={accountId}
           />
         )}
       </div>
