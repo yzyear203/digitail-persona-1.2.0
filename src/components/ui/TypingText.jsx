@@ -8,25 +8,37 @@ function toCharacters(text) {
   return Array.from(source);
 }
 
-function getPersonaSpeeds(persona) {
+const SPEED_PRESETS = {
+  slow: { baseSpeed: 50, deleteSpeed: 25 },
+  normal: { baseSpeed: 30, deleteSpeed: 15 },
+  fast: { baseSpeed: 18, deleteSpeed: 12 },
+};
+
+function getPersonaSpeeds(persona, speed, deleteSpeed) {
+  if (Number.isFinite(speed)) {
+    return {
+      baseSpeed: Math.max(12, speed),
+      deleteSpeed: Math.max(8, Number.isFinite(deleteSpeed) ? deleteSpeed : Math.round(speed * 0.5)),
+    };
+  }
+
   const personaText = String(persona || '');
   if (personaText.includes('细腻') || personaText.includes('犹豫') || personaText.includes('慢')) {
-    return { baseSpeed: 50, deleteSpeed: 25 };
+    return SPEED_PRESETS.slow;
   }
 
   if (personaText.includes('急躁') || personaText.includes('快') || personaText.includes('心直口快') || personaText.includes('暴躁')) {
-    return { baseSpeed: 18, deleteSpeed: 12 };
+    return SPEED_PRESETS.fast;
   }
 
-  return { baseSpeed: 30, deleteSpeed: 15 };
+  return SPEED_PRESETS.normal;
 }
 
 function buildActions(content) {
   const actions = [];
+  const parts = String(content || '').split(/(<del>[\s\S]*?<\/del>)/g).filter(Boolean);
 
-  String(content || '').split(/(<del>[\s\S]*?<\/del>)/g).forEach(part => {
-    if (!part) return;
-
+  parts.forEach(part => {
     if (part.startsWith('<del>') && part.endsWith('</del>')) {
       const deletedText = part.replace(/^<del>/, '').replace(/<\/del>$/, '');
       const deletedChars = toCharacters(deletedText);
@@ -55,16 +67,10 @@ function getTypeDelay(char, baseSpeed, typedCount) {
   return Math.max(16, delay);
 }
 
-function runAfterPaint(callback, delay) {
-  const timeoutId = window.setTimeout(() => {
-    window.requestAnimationFrame(callback);
-  }, Math.max(16, delay));
-  return timeoutId;
-}
-
-export default function TypingText({ content, persona, onComplete, scrollRef }) {
+export default function TypingText({ content, persona, onComplete, scrollRef, speed, deleteSpeed }) {
   const textRef = useRef(null);
   const cursorRef = useRef(null);
+  const textNodeRef = useRef(null);
   const onCompleteRef = useRef(onComplete);
 
   useEffect(() => { onCompleteRef.current = onComplete; }, [onComplete]);
@@ -72,37 +78,94 @@ export default function TypingText({ content, persona, onComplete, scrollRef }) 
   useEffect(() => {
     let isMounted = true;
     let timerId = null;
-    let currentText = '';
+    let frameId = null;
+    let scrollFrameId = null;
+    const currentChars = [];
     let index = 0;
     let typedCount = 0;
     const actions = buildActions(content);
-    const { baseSpeed, deleteSpeed } = getPersonaSpeeds(persona);
+    const speeds = getPersonaSpeeds(persona, speed, deleteSpeed);
 
-    if (textRef.current) textRef.current.textContent = '';
-    if (cursorRef.current) cursorRef.current.style.display = 'inline-block';
+    const requestFrame = callback => {
+      if (typeof window.requestAnimationFrame === 'function') {
+        frameId = window.requestAnimationFrame(callback);
+      } else {
+        timerId = window.setTimeout(callback, 16);
+      }
+    };
 
-    const writeTextNow = nextText => {
-      currentText = nextText;
+    const requestScrollAfterPaint = () => {
+      if (!scrollRef?.current) return;
+      if (scrollFrameId && typeof window.cancelAnimationFrame === 'function') {
+        window.cancelAnimationFrame(scrollFrameId);
+      }
+      if (typeof window.requestAnimationFrame === 'function') {
+        scrollFrameId = window.requestAnimationFrame(() => {
+          scrollFrameId = null;
+          scrollRef?.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+        });
+      } else {
+        scrollRef.current.scrollIntoView({ behavior: 'auto', block: 'end' });
+      }
+    };
+
+    if (textRef.current) {
+      textRef.current.textContent = '';
+      textNodeRef.current = document.createTextNode('');
+      textRef.current.appendChild(textNodeRef.current);
+    }
+    if (cursorRef.current) {
+      cursorRef.current.style.opacity = '0.75';
+      cursorRef.current.classList.add('animate-pulse');
+    }
+
+    const ensureTextNode = () => {
+      if (textNodeRef.current?.parentNode === textRef.current) return textNodeRef.current;
+      if (!textRef.current) return null;
+      textRef.current.textContent = '';
+      textNodeRef.current = document.createTextNode('');
+      textRef.current.appendChild(textNodeRef.current);
+      return textNodeRef.current;
+    };
+
+    const appendCharNow = char => {
+      currentChars.push(char);
       // 不再依赖 React 每字 setState。直接写 DOM 文本节点，避免 React 批处理导致“第一个字卡住，最后整段蹦出”。
       // 注意：这个 span 不能有 React children，否则父组件重渲染会用旧 state 把命令式写入的文本清空。
-      if (textRef.current) textRef.current.textContent = nextText;
-      scrollRef?.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+      ensureTextNode()?.appendData(char);
+      requestScrollAfterPaint();
+    };
+
+    const deleteCharNow = () => {
+      const removedChar = currentChars.pop();
+      const textNode = ensureTextNode();
+      if (removedChar && textNode) {
+        textNode.deleteData(Math.max(0, textNode.length - removedChar.length), removedChar.length);
+      }
+      requestScrollAfterPaint();
     };
 
     const scheduleNext = delay => {
-      timerId = runAfterPaint(runAction, delay);
+      timerId = window.setTimeout(() => {
+        timerId = null;
+        requestFrame(runAction);
+      }, Math.max(16, delay));
     };
 
     const finish = () => {
       if (!isMounted) return;
-      if (cursorRef.current) cursorRef.current.style.display = 'none';
-      // 让最终字符和光标隐藏至少经历一次浏览器绘制，再通知父组件切换为静态文本。
-      window.requestAnimationFrame(() => {
+      if (cursorRef.current) {
+        cursorRef.current.classList.remove('animate-pulse');
+        cursorRef.current.style.opacity = '0';
+      }
+      // 让最终字符和光标淡出至少经历一次浏览器绘制，再通知父组件切换为静态文本。
+      requestFrame(() => {
         if (isMounted) onCompleteRef.current?.();
       });
     };
 
-    const runAction = () => {
+    function runAction() {
+      frameId = null;
       if (!isMounted) return;
 
       if (index >= actions.length) {
@@ -112,21 +175,21 @@ export default function TypingText({ content, persona, onComplete, scrollRef }) 
 
       const action = actions[index];
       index += 1;
-      let delay = baseSpeed;
+      let delay = speeds.baseSpeed;
 
       if (action.type === 'type') {
         typedCount += 1;
-        writeTextNow(currentText + action.char);
-        delay = getTypeDelay(action.char, baseSpeed, typedCount);
+        appendCharNow(action.char);
+        delay = getTypeDelay(action.char, speeds.baseSpeed, typedCount);
       } else if (action.type === 'delete') {
-        writeTextNow(toCharacters(currentText).slice(0, -1).join(''));
-        delay = deleteSpeed;
+        deleteCharNow();
+        delay = speeds.deleteSpeed;
       } else if (action.type === 'pause') {
         delay = action.ms;
       }
 
       scheduleNext(delay);
-    };
+    }
 
     // 旧版是立即 runAction()，不要先空等 80ms；后续每帧直接写 DOM，避免 React 状态批处理卡住字符更新。
     runAction();
@@ -134,13 +197,19 @@ export default function TypingText({ content, persona, onComplete, scrollRef }) 
     return () => {
       isMounted = false;
       if (timerId) window.clearTimeout(timerId);
+      if (frameId && typeof window.cancelAnimationFrame === 'function') window.cancelAnimationFrame(frameId);
+      if (scrollFrameId && typeof window.cancelAnimationFrame === 'function') window.cancelAnimationFrame(scrollFrameId);
+      textNodeRef.current = null;
     };
-  }, [content, persona, scrollRef]);
+  }, [content, persona, scrollRef, speed, deleteSpeed]);
 
   return (
     <span className="whitespace-pre-wrap">
       <span ref={textRef} />
-      <span ref={cursorRef} className="inline-block w-1.5 h-4 ml-1 bg-blue-400 animate-pulse align-middle"></span>
+      <span
+        ref={cursorRef}
+        className="inline-block w-0.5 h-[1em] ml-0.5 bg-current align-middle opacity-75 animate-pulse transition-opacity duration-500"
+      ></span>
     </span>
   );
 }
