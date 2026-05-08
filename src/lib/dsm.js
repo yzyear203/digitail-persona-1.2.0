@@ -97,7 +97,9 @@ export const NATURAL_REPLY_GUARD = `
 【自然回复节奏】
 - 允许自然的开头废话、调侃、反问和情绪铺垫，只要符合当前人格与上下文即可。
 - 不要为了“干净”而强行删掉寒暄、口头禅或轻微自我表演；这些可以作为人格表达的一部分保留。
-- 若需要分多段表达，请用 ||| 分隔成独立气泡；每个气泡尽量只承载一个情绪/信息点。
+- 如果回复超过 2 句话，必须使用 ||| 分隔成多个独立聊天气泡。
+- 每个气泡只承载一个情绪/信息点。
+- 不要使用普通换行来模拟气泡，必须使用 |||。
 `;
 
 export function getDaysSince(dateString, now = Date.now()) {
@@ -284,16 +286,31 @@ function protectDeleteSpans(text) {
 
 function splitByParagraphsPreservingMarkers(text) {
     const { protectedText, restore } = protectDeleteSpans(text);
-    const paragraphParts = protectedText
+
+    // 优先按空行拆分：适合模型输出多个自然段的情况
+    let paragraphParts = protectedText
         .split(/(?:\n\s*){2,}/)
         .map(part => restore(part).trim())
         .filter(Boolean);
 
+    // 如果模型没有用空行，只用了普通换行，也尝试按普通换行拆
+    if (paragraphParts.length <= 1 && protectedText.includes('\n')) {
+        paragraphParts = protectedText
+            .split(/\n+/)
+            .map(part => restore(part).trim())
+            .filter(Boolean);
+    }
+
     if (paragraphParts.length <= 1) return [text];
 
     const mergedParts = mergeControlOnlyParts(paragraphParts);
-    const shouldSplitByParagraph = mergedParts.every(part => part.length <= 220) && mergedParts.length <= 4;
-    return shouldSplitByParagraph ? mergedParts : [text];
+
+    // 聊天气泡允许更自然地拆分，避免超过 4 段就被合并成一个大气泡
+    if (mergedParts.length <= 8 && mergedParts.every(part => part.length <= 360)) {
+        return mergedParts;
+    }
+
+    return [text];
 }
 
 export function splitAssistantReply(responseText) {
