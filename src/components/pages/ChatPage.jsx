@@ -4,6 +4,7 @@ import ChatMessageList from '../chat/ChatMessageList';
 import ChatInput from '../chat/ChatInput';
 import TasksModal from '../ui/TasksModal';
 import MemoryCabin from '../ui/MemoryCabin';
+import ChatAppearanceModal from '../ui/ChatAppearanceModal';
 import { callDoubaoAPI, callDeepSeekAPI } from '../../lib/api';
 import { db } from '../../lib/cloudbase';
 import { upsertPersonaProfile } from '../../lib/profileStore';
@@ -23,7 +24,21 @@ const USER_SETTLE_DELAY_MS = 3000;
 const DEBUG_FORCE_QUOTE_RECALL = false;
 const DEBUG_RECALL_FALLBACK_TEXT = '撤回测试：如果组件正常，这条会先打出来，然后变成撤回提示。';
 const CONTROL_MARKER_REGEX = /<del>[\s\S]*?<\/del>|<\/?recall>|\[quote:[\s\S]*?\]/g;
+const DEFAULT_CHAT_APPEARANCE = {
+  theme: 'light',
+  userAvatar: '',
+  backgroundImage: '',
+};
 
+function getStoredChatAppearance(activeId) {
+  try {
+    const raw = localStorage.getItem(`chat_appearance_${activeId}`);
+    return raw ? { ...DEFAULT_CHAT_APPEARANCE, ...JSON.parse(raw) } : DEFAULT_CHAT_APPEARANCE;
+  } catch (error) {
+    console.warn('读取聊天外观设置失败:', error);
+    return DEFAULT_CHAT_APPEARANCE;
+  }
+}
 
 function extractDeclaredUserName(text) {
   const normalizedText = String(text || '').trim();
@@ -118,6 +133,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   const [isTypingIndicator, setIsTypingIndicator] = useState(false);
   const [showTasksModal, setShowTasksModal] = useState(false);
   const [showMemoryCabin, setShowMemoryCabin] = useState(false);
+  const [showAppearanceModal, setShowAppearanceModal] = useState(false);
   const [extractedTasks, setExtractedTasks] = useState([]);
   const [isExtracting, setIsExtracting] = useState(false);
 
@@ -132,6 +148,16 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
 
   const activeId = activePersona?.id || 'default';
   const chatKey = `chat_history_${activeId}`;
+  const [chatAppearance, setChatAppearance] = useState(() => getStoredChatAppearance(activeId));
+  const isDarkChat = chatAppearance.theme === 'dark';
+  const chatShellClass = isDarkChat ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-900';
+  const chatBackgroundStyle = chatAppearance.backgroundImage
+    ? {
+        backgroundImage: `linear-gradient(${isDarkChat ? 'rgba(2,6,23,.78), rgba(2,6,23,.78)' : 'rgba(248,250,252,.55), rgba(248,250,252,.55)'}), url(${chatAppearance.backgroundImage})`,
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
+      }
+    : undefined;
 
   const resolvePendingTypingAnimations = () => {
     typingResolversRef.current.forEach(resolve => resolve());
@@ -145,6 +171,19 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   useEffect(() => {
     activePersonaRef.current = activePersona;
   }, [activePersona]);
+
+  useEffect(() => {
+    setChatAppearance(getStoredChatAppearance(activeId));
+  }, [activeId]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(`chat_appearance_${activeId}`, JSON.stringify(chatAppearance));
+    } catch (error) {
+      console.warn('保存聊天外观设置失败:', error);
+      showMsg('⚠️ 图片可能过大，浏览器本地存储已满');
+    }
+  }, [activeId, chatAppearance, showMsg]);
 
   useEffect(() => {
     return () => {
@@ -348,7 +387,6 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     }
   };
 
-
   const persistDeclaredUserName = (userName) => {
     if (!userName) return;
 
@@ -438,8 +476,6 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     }, USER_SETTLE_DELAY_MS);
   };
 
-
-
   const handleClearChatHistory = () => {
     if (!window.confirm('确定清空当前聊天记录吗？这只会删除对话气泡，不会清空任何记忆。')) return;
 
@@ -490,43 +526,62 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   };
 
   return (
-    <div className="h-screen bg-slate-100 flex flex-col font-sans overflow-hidden">
-      <ChatHeader
-        activePersona={activePersona}
-        isTypingIndicator={isTypingIndicator}
-        isExtracting={isExtracting}
-        handleExtractTasks={handleExtractTasks}
-        setAppPhase={setAppPhase}
-        setShowMemoryCabin={setShowMemoryCabin}
-      />
-
-      <ChatMessageList
-        messages={messages}
-        setMessages={setMessages}
-        activePersona={activePersona}
-        messagesEndRef={messagesEndRef}
-        onAssistantAnimationComplete={messageId => {
-          const resolve = typingResolversRef.current.get(messageId);
-          if (resolve) resolve();
-        }}
-      />
-
-      <ChatInput
-        input={input}
-        setInput={setInput}
-        handleSendMessage={handleSendMessage}
-      />
-
-      {showTasksModal && <TasksModal tasks={extractedTasks} onClose={() => setShowTasksModal(false)} />}
-      {showMemoryCabin && (
-        <MemoryCabin
-          activePersona={activePersona}
-          setActivePersona={setActivePersona}
-          showMsg={showMsg}
-          onClose={() => setShowMemoryCabin(false)}
-          onClearChatHistory={handleClearChatHistory}
-        />
+    <div className={`h-screen flex flex-col font-sans overflow-hidden transition-colors ${chatShellClass}`} style={chatBackgroundStyle}>
+      {!chatAppearance.backgroundImage && (
+        <div className={`absolute inset-0 pointer-events-none ${isDarkChat ? 'bg-slate-950' : 'bg-slate-100'}`} />
       )}
+      <div className="relative z-10 h-full flex flex-col min-h-0">
+        <ChatHeader
+          activePersona={activePersona}
+          isTypingIndicator={isTypingIndicator}
+          isExtracting={isExtracting}
+          handleExtractTasks={handleExtractTasks}
+          setAppPhase={setAppPhase}
+          setShowMemoryCabin={setShowMemoryCabin}
+          setShowAppearanceModal={setShowAppearanceModal}
+          chatAppearance={chatAppearance}
+        />
+
+        <ChatMessageList
+          messages={messages}
+          setMessages={setMessages}
+          activePersona={activePersona}
+          messagesEndRef={messagesEndRef}
+          chatAppearance={chatAppearance}
+          onAssistantAnimationComplete={messageId => {
+            const resolve = typingResolversRef.current.get(messageId);
+            if (resolve) resolve();
+          }}
+        />
+
+        <ChatInput
+          input={input}
+          setInput={setInput}
+          handleSendMessage={handleSendMessage}
+          chatAppearance={chatAppearance}
+        />
+
+        {showTasksModal && <TasksModal tasks={extractedTasks} onClose={() => setShowTasksModal(false)} />}
+        {showMemoryCabin && (
+          <MemoryCabin
+            activePersona={activePersona}
+            setActivePersona={setActivePersona}
+            showMsg={showMsg}
+            onClose={() => setShowMemoryCabin(false)}
+            onClearChatHistory={handleClearChatHistory}
+          />
+        )}
+        {showAppearanceModal && (
+          <ChatAppearanceModal
+            activePersona={activePersona}
+            setActivePersona={setActivePersona}
+            chatAppearance={chatAppearance}
+            setChatAppearance={setChatAppearance}
+            showMsg={showMsg}
+            onClose={() => setShowAppearanceModal(false)}
+          />
+        )}
+      </div>
     </div>
   );
 }
