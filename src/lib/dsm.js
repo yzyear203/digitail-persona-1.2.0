@@ -18,6 +18,12 @@ export const DEFAULT_T3_PROFILE = {
     },
     current_context: { value: "", expires_at: "" },
     user_name: "",
+    interaction_style: {
+        quote_tendency: "medium",
+        quote_triggers: [],
+        recall_tendency: "low",
+        recall_triggers: [],
+    },
     forbidden_topics: [],
     pending_conflicts: []
 };
@@ -34,6 +40,43 @@ function shouldInjectField(field) {
 function formatProfileField(label, field) {
     if (!shouldInjectField(field)) return '';
     return `${label}:${field.value}${CONFIDENCE_LABEL[field.confidence] || ''} | `;
+}
+
+function normalizeTriggerList(value, maxCount = 3) {
+    if (!Array.isArray(value)) return [];
+    return value
+        .map(item => String(item || '').trim())
+        .filter(Boolean)
+        .slice(0, maxCount);
+}
+
+function formatInteractionStyleBlock(t3) {
+    const style = t3?.interaction_style || {};
+    const quoteTriggers = normalizeTriggerList(style.quote_triggers, 3);
+    const recallTriggers = normalizeTriggerList(style.recall_triggers, 3);
+
+    if (quoteTriggers.length === 0 && recallTriggers.length === 0) return '';
+
+    const quoteTendency = style.quote_tendency || 'medium';
+    const recallTendency = style.recall_tendency || 'low';
+
+    let block = `【当前人格的引用与撤回习惯】\n`;
+    block += `引用倾向：${quoteTendency}\n`;
+    if (quoteTriggers.length > 0) {
+        block += `容易引用的触发条件：\n${quoteTriggers.map(item => `- ${item}`).join('\n')}\n`;
+    }
+
+    block += `撤回倾向：${recallTendency}\n`;
+    if (recallTriggers.length > 0) {
+        block += `容易撤回的触发条件：\n${recallTriggers.map(item => `- ${item}`).join('\n')}\n`;
+    }
+
+    block += `执行方式：\n`;
+    block += `- 命中引用触发条件时，优先在对应气泡开头使用 [quote:对方原话短片段]。\n`;
+    block += `- 命中撤回触发条件时，可以使用 <recall>发出后后悔的原消息</recall>。\n`;
+    block += `- 引用是注意力落点，撤回是情绪反应；不要为了展示功能而机械使用。\n`;
+
+    return block;
 }
 
 // ==========================================
@@ -201,6 +244,9 @@ export function buildSystemPrompt(activePersona, hotT1, isCooling, daysSinceLast
     prompt += T2_TOOL_DECLARATION + "\n\n";
 
     prompt += NATURAL_REPLY_GUARD + "\n\n";
+
+    const interactionStyleBlock = formatInteractionStyleBlock(t3);
+    if (interactionStyleBlock) prompt += interactionStyleBlock + "\n\n";
 
     if (hotT1 && hotT1.length > 0) {
         prompt += "[近期事件]\n" + hotT1.map(item => `- [${new Date(item.timestamp).toISOString().split('T')[0]}] ${item.summary}`).join('\n') + "\n\n";
