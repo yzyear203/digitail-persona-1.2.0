@@ -92,36 +92,19 @@ async function writeMemoryThroughVectorize({ personaId, memoryRecord }) {
   const { cloudbase } = await import('../../lib/cloudbase');
   if (!cloudbase) throw new Error('CloudBase SDK 未初始化，无法写入记忆');
 
-  const candidateNames = ['vectorize', 'vectorize的云函数'];
-  let lastError = null;
+  const functionName = 'vectorize_memory';
+  const res = await cloudbase.callFunction({
+    name: functionName,
+    data: { personaId, records: [memoryRecord] },
+    timeout: 15000,
+  });
 
-  for (const functionName of candidateNames) {
-    try {
-      const res = await cloudbase.callFunction({
-        name: functionName,
-        data: { personaId, records: [memoryRecord] },
-        timeout: 15000,
-      });
-
-      if (res.result?.success === false) {
-        throw new Error(res.result.error || `${functionName} 云函数返回失败`);
-      }
-
-      console.log(`T1 深态记忆已通过 ${functionName} 云函数写入数据库`, res.result || '');
-      return true;
-    } catch (error) {
-      lastError = error;
-      const message = String(error?.message || error || '');
-      const isFunctionMissing = /FUNCTION_NOT_FOUND|FunctionName parameter could not be found/i.test(message);
-      if (isFunctionMissing) {
-        console.warn(`${functionName} 云函数未找到，尝试下一个候选名称。`);
-        continue;
-      }
-      throw error;
-    }
+  if (res.result?.success === false) {
+    throw new Error(res.result.error || `${functionName} 云函数返回失败`);
   }
 
-  throw lastError || new Error('未找到可用的 vectorize 云函数');
+  console.log(`T1 深态记忆已通过 ${functionName} 云函数写入数据库`, res.result || '');
+  return true;
 }
 
 async function writeMemoryDirectly({ memoryRecord }) {
@@ -263,7 +246,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
           try {
             await writeMemoryThroughVectorize({ personaId: activeId, memoryRecord });
           } catch (vectorizeError) {
-            console.warn('vectorize 云函数不可用，降级为前端直写:', vectorizeError.message);
+            console.warn('vectorize_memory 云函数不可用，降级为前端直写:', vectorizeError.message);
             try {
               await writeMemoryDirectly({ memoryRecord });
             } catch (fallbackError) {
