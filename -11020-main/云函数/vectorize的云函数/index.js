@@ -4,7 +4,6 @@ const db = app.database();
 const axios = require('axios');
 
 const EMBEDDING_API_KEY = process.env.EMBEDDING_API_KEY;
-const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 
 function normalizeIncomingMemory(personaId, item) {
   const isString = typeof item === 'string';
@@ -48,16 +47,6 @@ function cosineSimilarity(vecA, vecB) {
   return denominator ? dot / denominator : 0;
 }
 
-async function shouldOverwrite(oldText, newText) {
-  if (!DEEPSEEK_API_KEY) return false;
-  const prompt = `判断新事实是否覆盖旧事实。\n旧：${oldText}\n新：${newText}\n如果是，只输出 YES；否则输出 NO。`;
-  const dsRes = await axios.post('https://api.deepseek.com/chat/completions', {
-    model: 'deepseek-chat',
-    messages: [{ role: 'user', content: prompt }]
-  }, { headers: { Authorization: `Bearer ${DEEPSEEK_API_KEY}` } });
-
-  return dsRes.data.choices?.[0]?.message?.content?.includes('YES');
-}
 
 exports.main = async (event = {}, _context = {}) => {
   const { personaId } = event;
@@ -120,9 +109,11 @@ exports.main = async (event = {}, _context = {}) => {
         .sort((a, b) => b.score - a.score);
 
       const topMatch = scored[0];
-      if (topMatch && topMatch.score > 0.85 && await shouldOverwrite(topMatch.content, record.content)) {
+      // 不再为了判断覆盖关系调用 DeepSeek，避免记忆后台任务挤占聊天主链路。
+      // 高相似度且同一 event_id 的情况已在上方更新；普通相似内容保留为新 T1。
+      if (topMatch && topMatch.score > 0.98 && topMatch.content === record.content) {
         await db.collection('persona_memories').doc(topMatch.id).update({
-          ...record,
+          embedding: record.embedding,
           updateTime: db.serverDate(),
         });
       } else {
