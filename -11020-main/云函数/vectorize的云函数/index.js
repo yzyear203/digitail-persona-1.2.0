@@ -4,7 +4,6 @@ const db = app.database();
 const axios = require('axios');
 
 const EMBEDDING_API_KEY = process.env.EMBEDDING_API_KEY;
-const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 
 function normalizeIncomingMemory(personaId, item) {
   const isString = typeof item === 'string';
@@ -48,16 +47,6 @@ function cosineSimilarity(vecA, vecB) {
   return denominator ? dot / denominator : 0;
 }
 
-async function shouldOverwrite(oldText, newText) {
-  if (!DEEPSEEK_API_KEY) return false;
-  const prompt = `判断新事实是否覆盖旧事实。\n旧：${oldText}\n新：${newText}\n如果是，只输出 YES；否则输出 NO。`;
-  const dsRes = await axios.post('https://api.deepseek.com/chat/completions', {
-    model: 'deepseek-chat',
-    messages: [{ role: 'user', content: prompt }]
-  }, { headers: { Authorization: `Bearer ${DEEPSEEK_API_KEY}` } });
-
-  return dsRes.data.choices?.[0]?.message?.content?.includes('YES');
-}
 
 exports.main = async (event = {}, _context = {}) => {
   const { personaId } = event;
@@ -68,29 +57,41 @@ exports.main = async (event = {}, _context = {}) => {
     const records = incoming.map(item => normalizeIncomingMemory(personaId, item)).filter(item => item.content);
     if (!records.length) return { success: true, count: 0 };
 
-    const embedRes = await axios.post('https://api.siliconflow.com/v1/embeddings', {
-      model: 'Qwen/Qwen3-Embedding-8B',
-      input: records.map(item => item.content)
-    }, { headers: { Authorization: `Bearer ${EMBEDDING_API_KEY}` } });
+    let vectors = [];
+    try {
+      if (!EMBEDDING_API_KEY) throw new Error('缺少 EMBEDDING_API_KEY');
+      const embedRes = await axios.post('https://api.siliconflow.com/v1/embeddings', {
+        model: 'Qwen/Qwen3-Embedding-8B',
+        input: records.map(item => item.content)
+      }, { headers: { Authorization: `Bearer ${EMBEDDING_API_KEY}` } });
+      vectors = embedRes.data.data || [];
+    } catch (embeddingError) {
+      console.warn('⚠️ 向量化失败，将先写入无 embedding 的原始记忆:', embeddingError.message);
+    }
 
-    const vectors = embedRes.data.data || [];
     let upserted = 0;
 
     for (let i = 0; i < records.length; i++) {
-      const record = { ...records[i], embedding: vectors[i]?.embedding };
-      if (!record.embedding) continue;
+      const record = { ...records[i], embedding: vectors[i]?.embedding || null };
 
-      // 如果前端已经按 event_id 直写过标准 T1，这里只补 embedding，不重复新增。
+      // 如果已经存在同一个 event_id，只更新该文档，避免前端重试造成重复记忆。
       if (record.event_id) {
         const existing = await db.collection('persona_memories').where({ event_id: record.event_id }).limit(1).get();
         if (existing.data?.length) {
           await db.collection('persona_memories').doc(existing.data[0]._id).update({
-            embedding: record.embedding,
+            ...record,
             updateTime: db.serverDate(),
           });
           upserted++;
           continue;
         }
+      }
+
+      // embedding 不可用时也必须保底写入原始 T1，否则记忆库会看起来完全不增长。
+      if (!record.embedding) {
+        await db.collection('persona_memories').add(record);
+        upserted++;
+        continue;
       }
 
       const recentRes = await db.collection('persona_memories').where({ user_id: record.user_id }).limit(100).get();
@@ -108,9 +109,11 @@ exports.main = async (event = {}, _context = {}) => {
         .sort((a, b) => b.score - a.score);
 
       const topMatch = scored[0];
-      if (topMatch && topMatch.score > 0.85 && await shouldOverwrite(topMatch.content, record.content)) {
+      // 不再为了判断覆盖关系调用 DeepSeek，避免记忆后台任务挤占聊天主链路。
+      // 高相似度且同一 event_id 的情况已在上方更新；普通相似内容保留为新 T1。
+      if (topMatch && topMatch.score > 0.98 && topMatch.content === record.content) {
         await db.collection('persona_memories').doc(topMatch.id).update({
-          ...record,
+          embedding: record.embedding,
           updateTime: db.serverDate(),
         });
       } else {
