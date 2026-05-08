@@ -331,6 +331,31 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     }, USER_SETTLE_DELAY_MS);
   };
 
+
+
+  const handleClearChatHistory = () => {
+    if (!window.confirm('确定清空当前聊天记录吗？这只会删除对话气泡，不会清空任何记忆。')) return;
+
+    generationNonce.current = Date.now();
+    if (pendingResponseTimerRef.current) {
+      clearTimeout(pendingResponseTimerRef.current);
+      pendingResponseTimerRef.current = null;
+    }
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    if (extractTimerRef.current) clearTimeout(extractTimerRef.current);
+    resolvePendingTypingAnimations();
+    setIsTypingIndicator(false);
+
+    localStorage.removeItem(chatKey);
+    setMessages([
+      { id: Date.now(), role: 'system', text: 'SYSTEM_BOOT', time: new Date().toLocaleTimeString(), isAnimated: false }
+    ]);
+    showMsg('✅ 聊天记录已清空，记忆未受影响');
+  };
+
   const handleExtractTasks = async () => {
     setIsExtracting(true);
     try {
@@ -392,6 +417,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
           setActivePersona={setActivePersona}
           showMsg={showMsg}
           onClose={() => setShowMemoryCabin(false)}
+          onClearChatHistory={handleClearChatHistory}
         />
       )}
     </div>

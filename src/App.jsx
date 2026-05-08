@@ -55,6 +55,13 @@ export default function App() {
     }
   }, [authProps.user]);
 
+  useEffect(() => {
+    if (!activePersona?.id) return;
+    setSavedPersonas(personas => personas.map(persona => (
+      persona.id === activePersona.id ? { ...persona, ...activePersona } : persona
+    )));
+  }, [activePersona]);
+
   // 🚀 核心新增：监听 URL 裂变参数，实现一键穿透拉起
   useEffect(() => {
     const checkShareLink = async () => {
@@ -251,6 +258,7 @@ JSON 格式必须严格如下：
     ]);
     setAppPhase('chat');
   };
+
 
   // 4. 销毁数字资产
   const handleDeleteSavedPersona = async (e, id) => {
