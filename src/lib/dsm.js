@@ -214,7 +214,6 @@ export function saveToHotT1Cache(userId, summary) {
             if (Date.now() <= parsed.expires_at) data = parsed;
         }
         data.items.push({ summary, timestamp: Date.now() });
-        // 防止上下文爆满，最多保留 5 条近期 T1
         if (data.items.length > 5) data.items = data.items.slice(-5);
         localStorage.setItem(key, JSON.stringify(data));
     } catch (error) {
@@ -233,7 +232,14 @@ export function buildSystemPrompt(activePersona, hotT1, isCooling, daysSinceLast
         console.warn('T3 JSON 解析失败，使用空档案继续组装 Prompt:', error);
     }
 
-    let prompt = formatT3Compact(t3) + "\n\n";
+    const personaName = String(activePersona?.name || '').trim();
+    let prompt = '';
+
+    if (personaName) {
+        prompt += `【你的自我身份】你的名字是“${personaName}”。这是你作为 Persona 的名字，不是用户的名字。用户问“你叫什么/你是谁/你叫啥”时，应优先回答这个名字。不要把这个名字写入用户档案或当作用户称呼。\n\n`;
+    }
+
+    prompt += formatT3Compact(t3) + "\n\n";
 
     if (daysSinceLastChat > 7) {
         prompt += buildRegressionBlock(daysSinceLastChat, t3.current_context?.value) + "\n\n";
@@ -254,7 +260,6 @@ export function buildSystemPrompt(activePersona, hotT1, isCooling, daysSinceLast
         prompt += COLD_START_INSTRUCTION + "\n\n";
     }
 
-    // 禁忌话题装载
     if (t3.forbidden_topics && t3.forbidden_topics.length > 0) {
         prompt += `【绝对禁忌】严禁在对话中提及以下内容：${t3.forbidden_topics.join('、')}。\n\n`;
     }
@@ -269,10 +274,8 @@ export function applyBudgetAllocator(messages, sysPromptTokens, maxBudget = 4000
     let remainingBudget = maxBudget - sysPromptTokens;
     const result = [];
 
-    // 逆序遍历：优先保留最新消息，砍掉过早的对话历史
     for (let i = messages.length - 1; i >= 0; i--) {
         const msg = messages[i];
-        // 粗略估算：1 个中文字符约为 1.5 ~ 2 tokens
         const msgTokens = Math.ceil((msg.text || msg.content || "").length / 1.5);
         if (remainingBudget - msgTokens > 0) {
             result.unshift(msg);
@@ -398,10 +401,10 @@ export function buildT1MemoryRecord({ personaId, t1Event, sessionId = 'sess_acti
         event_id: eventId,
         idempotency_key: btoa(encodeURIComponent(idempotencyKeyRaw)).substring(0, 64),
         user_id: personaId,
-        personaId, // 兼容旧云函数/存量数据，后续迁移完成后可删除
+        personaId,
         memory_type: 't1_episodic',
         content: t1Event.summary,
-        text: t1Event.summary, // 兼容旧云函数/存量数据，后续迁移完成后可删除
+        text: t1Event.summary,
         importance_score: t1Event.importance,
         emotion: t1Event.emotion || 'neutral',
         confidence: t1Event.confidence || 'high',
