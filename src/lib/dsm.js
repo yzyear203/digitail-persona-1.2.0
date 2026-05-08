@@ -267,13 +267,41 @@ function isStructuredOrCodeReply(text) {
     return /```|^\s{0,3}#{1,6}\s|^\s{0,3}[-*+]\s|^\s{0,3}\d+\.\s|\|[^\n]+\|/m.test(text);
 }
 
+function hasInteractiveTypingMarker(text) {
+    return /<del>[\s\S]*?<\/del>|<\/?recall>|\[quote:.*?\]/.test(text);
+}
+
+function hasOnlyControlMarker(text) {
+    return !text.replace(/<\/?recall>|\[quote:.*?\]|<del>[\s\S]*?<\/del>/g, '').trim();
+}
+
+function splitByExplicitSeparators(text) {
+    const rawParts = text.split(/\|\|\|/).map(part => part.trim()).filter(Boolean);
+    const mergedParts = [];
+
+    for (const part of rawParts) {
+        if (hasOnlyControlMarker(part) && mergedParts.length === 0) {
+            mergedParts.push(part);
+        } else if (mergedParts.length > 0 && hasOnlyControlMarker(mergedParts[mergedParts.length - 1])) {
+            mergedParts[mergedParts.length - 1] = `${mergedParts[mergedParts.length - 1]}\n${part}`;
+        } else {
+            mergedParts.push(part);
+        }
+    }
+
+    return mergedParts;
+}
+
 export function splitAssistantReply(responseText) {
     const cleanedText = stripRedundantOpeningBanter(responseText);
     if (!cleanedText) return [];
 
     if (cleanedText.includes('|||')) {
-        return cleanedText.split(/\|\|\|/).map(part => part.trim()).filter(Boolean);
+        return splitByExplicitSeparators(cleanedText);
     }
+
+    // 删除、引用、撤回依赖原始标记和后续正文处在同一个消息里，不能按空行自动拆散。
+    if (hasInteractiveTypingMarker(cleanedText)) return [cleanedText];
 
     if (isStructuredOrCodeReply(cleanedText)) return [cleanedText];
 

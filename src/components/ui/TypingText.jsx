@@ -9,13 +9,16 @@ export default function TypingText({ content, persona, onComplete, scrollRef }) 
 
   useEffect(() => {
     let isMounted = true;
+    let timerId = null;
+    setDisplayText('');
+    setIsTyping(true);
     const actions = [];
     // 修复后：更换为满血版引擎速度
     let baseSpeed = 30, deleteSpeed = 15; // 默认：30ms/字
-    if (persona.includes('细腻') || persona.includes('犹豫') || persona.includes('慢')) { 
-      baseSpeed = 50; deleteSpeed = 25; 
-    } else if (persona.includes('急躁') || persona.includes('快') || persona.includes('心直口快') || persona.includes('暴躁')) { 
-      baseSpeed = 15; deleteSpeed = 10; 
+    if (persona.includes('细腻') || persona.includes('犹豫') || persona.includes('慢')) {
+      baseSpeed = 50; deleteSpeed = 25;
+    } else if (persona.includes('急躁') || persona.includes('快') || persona.includes('心直口快') || persona.includes('暴躁')) {
+      baseSpeed = 15; deleteSpeed = 10;
     }
     content.split(/(<del>.*?<\/del>)/g).forEach(part => {
       if (part.startsWith('<del>') && part.endsWith('</del>')) {
@@ -35,14 +38,14 @@ export default function TypingText({ content, persona, onComplete, scrollRef }) 
       if (index >= actions.length) {
         setIsTyping(false);
         if (onCompleteRef.current) onCompleteRef.current();
-        if (window.__typingResolve) { 
-          window.__typingResolve(); 
-          window.__typingResolve = null; 
+        if (window.__typingResolve) {
+          window.__typingResolve();
+          window.__typingResolve = null;
         }
         return;
       }
       const action = actions[index];
-      let delay = baseSpeed + (Math.random() * 100 - 50);
+      let delay = Math.max(12, baseSpeed + (Math.random() * 100 - 50));
       if (action.type === 'type') {
         currentText += action.char;
         setDisplayText(currentText);
@@ -50,18 +53,19 @@ export default function TypingText({ content, persona, onComplete, scrollRef }) 
       } else if (action.type === 'delete') {
         currentText = currentText.slice(0, -1);
         setDisplayText(currentText);
-        delay = deleteSpeed;
+        delay = Math.max(8, deleteSpeed);
       } else if (action.type === 'pause') {
         delay = action.ms;
       }
       if (scrollRef?.current) scrollRef.current.scrollIntoView({ behavior: 'auto' });
       index++;
-      setTimeout(runAction, delay);
+      timerId = setTimeout(runAction, delay);
     };
     runAction();
-    
+
     return () => {
       isMounted = false;
+      if (timerId) clearTimeout(timerId);
       // 🚀 核心修复：绝对不能在这里调用 __typingResolve()！
       // 否则在 React 严格模式下，双重挂载会导致锁被提前解开，从而多条消息同时打字。
     };
