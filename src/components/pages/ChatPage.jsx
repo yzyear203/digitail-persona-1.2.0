@@ -166,6 +166,7 @@ async function writeMemoryDirectly({ memoryRecord }) {
 
 export default function ChatPage({ setAppPhase, messages, setMessages, activePersona, setActivePersona, showMsg, userProfile, user }) {
   const [input, setInput] = useState('');
+  const [quotedMessage, setQuotedMessage] = useState(null);
   const [isTypingIndicator, setIsTypingIndicator] = useState(false);
   const [showTasksModal, setShowTasksModal] = useState(false);
   const [showMemoryCabin, setShowMemoryCabin] = useState(false);
@@ -476,12 +477,22 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     });
   };
 
+  const handleQuoteMessage = (message) => {
+    const text = stripControlMarkers(message?.text || '').replace(/\s+/g, ' ').slice(0, 80);
+    if (!text) return;
+    setQuotedMessage({ ...message, text });
+  };
+
   const handleSendMessage = async (e) => {
     if (e) e.preventDefault();
     const userText = input.trim();
     if (!userText) return;
 
+    const quotePrefix = quotedMessage?.text ? `[quote: ${quotedMessage.text.slice(0, 40)}]` : '';
+    const messageText = `${quotePrefix}${userText}`;
+
     setInput('');
+    setQuotedMessage(null);
     persistDeclaredUserName(extractDeclaredUserName(userText));
 
     const currentNonce = Date.now();
@@ -503,7 +514,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
 
     setMessages(prev => {
       const filtered = prev.filter(m => !(m.role === 'assistant' && m.isAnimated));
-      return [...filtered, { id: currentNonce, role: 'user', text: userText, time: new Date().toLocaleTimeString() }];
+      return [...filtered, { id: currentNonce, role: 'user', text: messageText, time: new Date().toLocaleTimeString() }];
     });
 
     try {
@@ -544,6 +555,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     setIsTypingIndicator(false);
 
     localStorage.removeItem(chatKey);
+    setQuotedMessage(null);
     setMessages([
       { id: Date.now(), role: 'system', text: 'SYSTEM_BOOT', time: new Date().toLocaleTimeString(), isAnimated: false }
     ]);
@@ -599,6 +611,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
           activePersona={activePersona}
           messagesEndRef={messagesEndRef}
           chatAppearance={chatAppearance}
+          onQuoteMessage={handleQuoteMessage}
           onAssistantAnimationComplete={messageId => {
             const resolve = typingResolversRef.current.get(messageId);
             if (resolve) resolve();
@@ -610,6 +623,8 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
           setInput={setInput}
           handleSendMessage={handleSendMessage}
           chatAppearance={chatAppearance}
+          quotedMessage={quotedMessage}
+          onClearQuote={() => setQuotedMessage(null)}
         />
 
         {showTasksModal && <TasksModal tasks={extractedTasks} onClose={() => setShowTasksModal(false)} />}
