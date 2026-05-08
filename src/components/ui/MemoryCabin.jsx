@@ -164,9 +164,9 @@ export default function MemoryCabin({ activePersona, setActivePersona, showMsg, 
     }
   };
 
-  const buildEmptyT3Profile = () => ({
-    identity: { value: '', confidence: 'low', last_updated: '', source_event_ids: [] },
-    personality: { value: '', confidence: 'low', last_updated: '', source_event_ids: [] },
+  const buildClearedUserMemoryT3 = (latestT3 = {}) => ({
+    ...latestT3,
+    // 只清除从用户对话中沉淀出的记忆状态；保留 persona 自身的身份、性格和禁忌边界。
     interests: [],
     relationship: {
       archetype: '观察者',
@@ -177,7 +177,6 @@ export default function MemoryCabin({ activePersona, setActivePersona, showMsg, 
     },
     current_context: { value: '', expires_at: '' },
     user_name: '',
-    forbidden_topics: [],
     pending_conflicts: []
   });
 
@@ -205,27 +204,34 @@ export default function MemoryCabin({ activePersona, setActivePersona, showMsg, 
   };
 
   const handleClearAllMemory = async () => {
-    if (!window.confirm('确定清空全部记忆吗？这会清空 T3 状态档案、兴趣/禁忌/当前状态，以及长期记忆库；不会删除聊天记录。')) return;
+    if (!window.confirm('确定清空对话记忆吗？这只会清除用户相关的长期记忆、称呼、兴趣和当前上下文；不会删除聊天记录，也不会改动 persona 的身份与性格设定。')) return;
 
     const personaId = latestPersonaRef.current?.id;
-    const emptyT3 = buildEmptyT3Profile();
-    const emptyT3Str = JSON.stringify(emptyT3);
+    let latestT3 = {};
+    try {
+      latestT3 = JSON.parse(latestPersonaRef.current?.content || '{}');
+    } catch (parseError) {
+      console.warn('清空对话记忆前解析 T3 失败，将基于当前舱体状态处理:', parseError);
+      latestT3 = t3Data || {};
+    }
+    const clearedT3 = buildClearedUserMemoryT3(latestT3);
+    const clearedT3Str = JSON.stringify(clearedT3);
 
     setIsSaving(true);
     try {
-      setT3Data(emptyT3);
-      setActivePersona(prev => ({ ...prev, content: emptyT3Str }));
+      setT3Data(clearedT3);
+      setActivePersona(prev => ({ ...prev, content: clearedT3Str }));
       localStorage.removeItem(`hot_t1_${personaId}`);
 
       if (db && personaId) {
-        await db.collection('personas').doc(personaId).update({ content: emptyT3Str });
-        await upsertPersonaProfile({ personaId, t3Profile: emptyT3, nickname: latestPersonaRef.current?.name });
+        await db.collection('personas').doc(personaId).update({ content: clearedT3Str });
+        await upsertPersonaProfile({ personaId, t3Profile: clearedT3, nickname: latestPersonaRef.current?.name });
         const removedIds = new Set();
         await removeMemoryDocsByField('user_id', personaId, removedIds);
         await removeMemoryDocsByField('personaId', personaId, removedIds);
       }
 
-      showMsg('✅ 全部记忆已清空，聊天记录已保留');
+      showMsg('✅ 对话记忆已清空，persona 身份与性格已保留');
     } catch (error) {
       showMsg('❌ 清空记忆失败: ' + error.message);
     } finally {
@@ -337,7 +343,7 @@ export default function MemoryCabin({ activePersona, setActivePersona, showMsg, 
                 <DatabaseZap size={15}/> 清空记忆
               </button>
             </div>
-            <p className="text-[10px] text-slate-400 leading-relaxed">清空聊天只删除当前对话气泡，不影响 T3/T1 记忆；清空记忆会重置状态档案并清理长期记忆库。</p>
+            <p className="text-[10px] text-slate-400 leading-relaxed">清空聊天只删除当前对话气泡；清空记忆只删除用户对话记忆和长期记忆库，保留 persona 身份与性格设定。</p>
           </div>
           
           {!t3Data || Object.keys(t3Data).length === 0 ? (

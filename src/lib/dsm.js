@@ -18,12 +18,6 @@ export const DEFAULT_T3_PROFILE = {
     },
     current_context: { value: "", expires_at: "" },
     user_name: "",
-    interaction_style: {
-        quote_tendency: "medium",
-        quote_triggers: [],
-        recall_tendency: "low",
-        recall_triggers: [],
-    },
     forbidden_topics: [],
     pending_conflicts: []
 };
