@@ -20,6 +20,7 @@ import {
 
 const IMMEDIATE_MEMORY_WINDOW = 8;
 const USER_SETTLE_DELAY_MS = 3000;
+const INPUT_IDLE_DELAY_MS = 900;
 const DEBUG_FORCE_QUOTE_RECALL = false;
 const DEBUG_RECALL_FALLBACK_TEXT = '撤回测试：如果组件正常，这条会先打出来，然后变成撤回提示。';
 const CONTROL_MARKER_REGEX = /<del>[\s\S]*?<\/del>|<\/?recall>|\[quote:[\s\S]*?\]/g;
@@ -127,11 +128,21 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   const extractTimerRef = useRef(null);
   const typingResolversRef = useRef(new Map());
   const pendingResponseTimerRef = useRef(null);
+  const pendingResponseNonceRef = useRef(null);
+  const lastUserMessageAtRef = useRef(0);
+  const lastInputActivityAtRef = useRef(0);
   const messagesRef = useRef(messages);
   const activePersonaRef = useRef(activePersona);
 
   const activeId = activePersona?.id || 'default';
   const chatKey = `chat_history_${activeId}`;
+
+  const clearPendingResponseTimer = () => {
+    if (pendingResponseTimerRef.current) {
+      clearTimeout(pendingResponseTimerRef.current);
+      pendingResponseTimerRef.current = null;
+    }
+  };
 
   const resolvePendingTypingAnimations = () => {
     typingResolversRef.current.forEach(resolve => resolve());
@@ -148,7 +159,8 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
 
   useEffect(() => {
     return () => {
-      if (pendingResponseTimerRef.current) clearTimeout(pendingResponseTimerRef.current);
+      clearPendingResponseTimer();
+      pendingResponseNonceRef.current = null;
       if (abortControllerRef.current) abortControllerRef.current.abort();
       resolvePendingTypingAnimations();
     };
@@ -265,6 +277,11 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   const runAssistantResponse = async (currentNonce) => {
     if (generationNonce.current !== currentNonce) return;
 
+    clearPendingResponseTimer();
+    if (pendingResponseNonceRef.current === currentNonce) {
+      pendingResponseNonceRef.current = null;
+    }
+
     const controller = new AbortController();
     abortControllerRef.current = controller;
     setIsTypingIndicator(true);
@@ -348,6 +365,38 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     }
   };
 
+  const scheduleAssistantResponse = (currentNonce) => {
+    if (generationNonce.current !== currentNonce) return;
+
+    clearPendingResponseTimer();
+
+    const now = Date.now();
+    const lastUserMessageAt = lastUserMessageAtRef.current || now;
+    const lastInputActivityAt = lastInputActivityAtRef.current || lastUserMessageAt;
+    const waitForLastMessageLimit = Math.max(0, USER_SETTLE_DELAY_MS - (now - lastUserMessageAt));
+    const waitForInputIdle = Math.max(0, INPUT_IDLE_DELAY_MS - (now - lastInputActivityAt));
+
+    if (waitForInputIdle === 0 || waitForLastMessageLimit === 0) {
+      pendingResponseNonceRef.current = null;
+      runAssistantResponse(currentNonce);
+      return;
+    }
+
+    pendingResponseTimerRef.current = setTimeout(() => {
+      pendingResponseTimerRef.current = null;
+      scheduleAssistantResponse(currentNonce);
+    }, Math.min(waitForInputIdle, waitForLastMessageLimit));
+  };
+
+  const handleInputChange = (nextInput) => {
+    lastInputActivityAtRef.current = Date.now();
+    setInput(nextInput);
+
+    if (pendingResponseNonceRef.current) {
+      scheduleAssistantResponse(pendingResponseNonceRef.current);
+    }
+  };
+
 
   const persistDeclaredUserName = (userName) => {
     if (!userName) return;
@@ -398,10 +447,8 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     const currentNonce = Date.now();
     generationNonce.current = currentNonce;
 
-    if (pendingResponseTimerRef.current) {
-      clearTimeout(pendingResponseTimerRef.current);
-      pendingResponseTimerRef.current = null;
-    }
+    clearPendingResponseTimer();
+    pendingResponseNonceRef.current = null;
 
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -432,10 +479,10 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
       console.warn('更新最后聊天时间失败', err);
     }
 
-    pendingResponseTimerRef.current = setTimeout(() => {
-      pendingResponseTimerRef.current = null;
-      runAssistantResponse(currentNonce);
-    }, USER_SETTLE_DELAY_MS);
+    lastUserMessageAtRef.current = currentNonce;
+    lastInputActivityAtRef.current = currentNonce;
+    pendingResponseNonceRef.current = currentNonce;
+    scheduleAssistantResponse(currentNonce);
   };
 
 
@@ -444,10 +491,10 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     if (!window.confirm('确定清空当前聊天记录吗？这只会删除对话气泡，不会清空任何记忆。')) return;
 
     generationNonce.current = Date.now();
-    if (pendingResponseTimerRef.current) {
-      clearTimeout(pendingResponseTimerRef.current);
-      pendingResponseTimerRef.current = null;
-    }
+    clearPendingResponseTimer();
+    pendingResponseNonceRef.current = null;
+    lastUserMessageAtRef.current = 0;
+    lastInputActivityAtRef.current = 0;
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
@@ -513,7 +560,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
 
       <ChatInput
         input={input}
-        setInput={setInput}
+        setInput={handleInputChange}
         handleSendMessage={handleSendMessage}
       />
 
