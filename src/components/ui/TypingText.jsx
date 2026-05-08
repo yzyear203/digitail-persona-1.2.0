@@ -1,7 +1,6 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { flushSync } from 'react-dom';
+import React, { useEffect, useRef, useState } from 'react';
 
-function toGraphemes(text) {
+function toCharacters(text) {
   const source = String(text || '');
   if (typeof Intl !== 'undefined' && Intl.Segmenter) {
     return Array.from(new Intl.Segmenter('zh-Hans', { granularity: 'grapheme' }).segment(source), item => item.segment);
@@ -9,127 +8,114 @@ function toGraphemes(text) {
   return Array.from(source);
 }
 
-function buildTypingActions(content) {
+function getPersonaSpeeds(persona) {
+  const personaText = String(persona || '');
+  if (personaText.includes('细腻') || personaText.includes('犹豫') || personaText.includes('慢')) {
+    return { baseSpeed: 50, deleteSpeed: 25 };
+  }
+
+  if (personaText.includes('急躁') || personaText.includes('快') || personaText.includes('心直口快') || personaText.includes('暴躁')) {
+    return { baseSpeed: 18, deleteSpeed: 12 };
+  }
+
+  return { baseSpeed: 30, deleteSpeed: 15 };
+}
+
+function buildActions(content) {
   const actions = [];
 
   String(content || '').split(/(<del>[\s\S]*?<\/del>)/g).forEach(part => {
     if (!part) return;
 
     if (part.startsWith('<del>') && part.endsWith('</del>')) {
-      const del = part.replace(/^<del>/, '').replace(/<\/del>$/, '');
-      const chars = toGraphemes(del);
-      chars.forEach(char => actions.push({ type: 'type', char }));
-      actions.push({ type: 'pause', ms: 420 });
-      chars.forEach(() => actions.push({ type: 'delete' }));
-      actions.push({ type: 'pause', ms: 240 });
+      const deletedText = part.replace(/^<del>/, '').replace(/<\/del>$/, '');
+      const deletedChars = toCharacters(deletedText);
+      deletedChars.forEach(char => actions.push({ type: 'type', char }));
+      actions.push({ type: 'pause', ms: 800 + Math.random() * 600 });
+      deletedChars.forEach(() => actions.push({ type: 'delete' }));
+      actions.push({ type: 'pause', ms: 500 + Math.random() * 500 });
       return;
     }
 
-    toGraphemes(part).forEach(char => actions.push({ type: 'type', char }));
+    toCharacters(part).forEach(char => actions.push({ type: 'type', char }));
   });
 
   return actions;
 }
 
-function getPersonaSpeed(persona) {
-  const personaText = String(persona || '');
-  if (personaText.includes('细腻') || personaText.includes('犹豫') || personaText.includes('慢')) {
-    return { type: 58, delete: 34 };
-  }
-
-  if (personaText.includes('急躁') || personaText.includes('快') || personaText.includes('心直口快') || personaText.includes('暴躁')) {
-    return { type: 34, delete: 24 };
-  }
-
-  return { type: 46, delete: 28 };
-}
-
 function getTypeDelay(char, baseSpeed, typedCount) {
-  if (/\s/.test(char)) return Math.max(18, Math.round(baseSpeed * 0.45));
+  let delay = baseSpeed + (Math.random() * 100 - 50);
 
-  let delay = baseSpeed + Math.random() * 18;
-  if (/[，,、]/.test(char)) delay += 70 + Math.random() * 50;
-  if (/[。！？!?；;]/.test(char)) delay += 130 + Math.random() * 90;
-  if (/[）)】\]》]/.test(char)) delay += 35;
+  // 参考旧版打字机的随机小停顿，但开头 8 个字不做随机长停，避免首字附近误以为卡死。
+  if (typedCount > 8 && Math.random() < 0.05) delay += 300 + Math.random() * 400;
+  if (/[，,、]/.test(char)) delay += 40 + Math.random() * 40;
+  if (/[。！？!?；;]/.test(char)) delay += 90 + Math.random() * 70;
 
-  // 开头几个字不能随机长停顿，避免出现“第一个字卡住”的观感。
-  if (typedCount < 8) return Math.max(28, Math.min(delay, baseSpeed + 22));
-  return Math.max(26, delay);
+  // 旧版随机抖动可能产生负数延迟；这里钳制下限，避免浏览器把多个 0ms tick 合并成一段蹦出。
+  return Math.max(16, delay);
 }
 
 export default function TypingText({ content, persona, onComplete, scrollRef }) {
   const [displayText, setDisplayText] = useState('');
   const [isTyping, setIsTyping] = useState(true);
   const onCompleteRef = useRef(onComplete);
-  const actions = useMemo(() => buildTypingActions(content), [content]);
 
   useEffect(() => { onCompleteRef.current = onComplete; }, [onComplete]);
 
-  useLayoutEffect(() => {
-    setDisplayText('');
-    setIsTyping(true);
-  }, [content]);
-
   useEffect(() => {
-    let cancelled = false;
+    let isMounted = true;
     let timerId = null;
     let currentText = '';
     let index = 0;
     let typedCount = 0;
-    const speed = getPersonaSpeed(persona);
+    const actions = buildActions(content);
+    const { baseSpeed, deleteSpeed } = getPersonaSpeeds(persona);
 
-    const commitText = nextText => {
-      if (cancelled) return;
-      // 强制每个 tick 只提交一个字符，避免 React 在计时器被阻塞后把多次 setState 合并成“一大段”。
-      flushSync(() => {
-        setDisplayText(nextText);
-      });
-      scrollRef?.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+    setDisplayText('');
+    setIsTyping(true);
+
+    const scheduleNext = delay => {
+      timerId = window.setTimeout(runAction, Math.max(16, delay));
     };
 
-    const finish = () => {
-      if (cancelled) return;
-      flushSync(() => {
-        setIsTyping(false);
-      });
-      onCompleteRef.current?.();
-    };
-
-    const step = () => {
-      if (cancelled) return;
+    const runAction = () => {
+      if (!isMounted) return;
 
       if (index >= actions.length) {
-        finish();
+        setIsTyping(false);
+        onCompleteRef.current?.();
         return;
       }
 
       const action = actions[index];
       index += 1;
-      let delay = speed.type;
+      let delay = baseSpeed;
 
       if (action.type === 'type') {
         currentText += action.char;
         typedCount += 1;
-        commitText(currentText);
-        delay = getTypeDelay(action.char, speed.type, typedCount);
+        setDisplayText(currentText);
+        delay = getTypeDelay(action.char, baseSpeed, typedCount);
       } else if (action.type === 'delete') {
-        currentText = toGraphemes(currentText).slice(0, -1).join('');
-        commitText(currentText);
-        delay = speed.delete + Math.random() * 10;
+        currentText = toCharacters(currentText).slice(0, -1).join('');
+        setDisplayText(currentText);
+        delay = deleteSpeed;
       } else if (action.type === 'pause') {
         delay = action.ms;
       }
 
-      timerId = window.setTimeout(step, delay);
+      scrollRef?.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+      scheduleNext(delay);
     };
 
-    timerId = window.setTimeout(step, 80);
+    // 旧版是立即 runAction()，不要先空等 80ms，避免只看到光标像卡住。
+    runAction();
 
     return () => {
-      cancelled = true;
+      isMounted = false;
       if (timerId) window.clearTimeout(timerId);
     };
-  }, [actions, persona, scrollRef]);
+  }, [content, persona, scrollRef]);
 
   return (
     <span className="whitespace-pre-wrap">
