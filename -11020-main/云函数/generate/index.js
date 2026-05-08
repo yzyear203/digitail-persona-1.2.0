@@ -1,6 +1,6 @@
 'use strict';
 
-exports.main = async (event, context) => {
+exports.main = async (event, _context) => {
   // 1. TCB 环境下，前端传来的参数直接挂载在 event 对象上
   const userMessages = event.messages;
 
@@ -27,13 +27,13 @@ exports.main = async (event, context) => {
     });
 
     const data = await response.json();
-    
+
     // 4. TCB 的规矩：直接 return 数据，前端的 res.result 就能接到
     return data;
-    
+
   } catch (error) {
     console.error("请求大模型失败:", error);
     // 不能用 res.status，直接返回错误对象
-    return { error: '服务器内部错误', details: error.message }; 
+    return { error: '服务器内部错误', details: error.message };
   }
 };
