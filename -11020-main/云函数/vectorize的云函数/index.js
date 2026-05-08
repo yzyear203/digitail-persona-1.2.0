@@ -4,6 +4,7 @@ const db = app.database();
 const axios = require('axios');
 
 const EMBEDDING_API_KEY = process.env.EMBEDDING_API_KEY;
+const EMBEDDING_TIMEOUT_MS = 1800;
 
 function normalizeIncomingMemory(personaId, item) {
   const isString = typeof item === 'string';
@@ -29,100 +30,84 @@ function normalizeIncomingMemory(personaId, item) {
     session_id: itemData.session_id || 'sess_vectorize',
     device_fp: itemData.device_fp || itemData.device_fingerprint || '',
     device_fingerprint: itemData.device_fingerprint || itemData.device_fp || '',
+    embedding: itemData.embedding || null,
     createTime: itemData.createTime || db.serverDate(),
   };
 }
 
-function cosineSimilarity(vecA, vecB) {
-  if (!Array.isArray(vecA) || !Array.isArray(vecB) || vecA.length !== vecB.length) return 0;
-  let dot = 0;
-  let nA = 0;
-  let nB = 0;
-  for (let i = 0; i < vecA.length; i++) {
-    dot += vecA[i] * vecB[i];
-    nA += vecA[i] * vecA[i];
-    nB += vecB[i] * vecB[i];
+async function upsertMemoryRecord(record) {
+  if (record.event_id) {
+    const existing = await db.collection('persona_memories').where({ event_id: record.event_id }).limit(1).get();
+    if (existing.data?.length) {
+      const docId = existing.data[0]._id;
+      await db.collection('persona_memories').doc(docId).update({
+        ...record,
+        embedding: record.embedding || existing.data[0].embedding || null,
+        updateTime: db.serverDate(),
+      });
+      return docId;
+    }
   }
-  const denominator = Math.sqrt(nA) * Math.sqrt(nB);
-  return denominator ? dot / denominator : 0;
+
+  const addRes = await db.collection('persona_memories').add(record);
+  return addRes.id || addRes._id;
 }
 
+async function updateRecordEmbedding(docId, embedding) {
+  if (!docId || !Array.isArray(embedding)) return false;
+  await db.collection('persona_memories').doc(docId).update({
+    embedding,
+    updateTime: db.serverDate(),
+  });
+  return true;
+}
+
+async function requestEmbeddings(records) {
+  if (!EMBEDDING_API_KEY) throw new Error('缺少 EMBEDDING_API_KEY');
+
+  const embedRes = await axios.post('https://api.siliconflow.com/v1/embeddings', {
+    model: 'Qwen/Qwen3-Embedding-8B',
+    input: records.map(item => item.content)
+  }, {
+    headers: { Authorization: `Bearer ${EMBEDDING_API_KEY}` },
+    timeout: EMBEDDING_TIMEOUT_MS,
+  });
+
+  return embedRes.data.data || [];
+}
 
 exports.main = async (event = {}, _context = {}) => {
   const { personaId } = event;
   const incoming = event.records || event.memories || [];
-  if (!personaId || !incoming.length) return { success: true, count: 0 };
+  if (!personaId || !incoming.length) return { success: true, count: 0, embedded: 0 };
 
   try {
     const records = incoming.map(item => normalizeIncomingMemory(personaId, item)).filter(item => item.content);
-    if (!records.length) return { success: true, count: 0 };
+    if (!records.length) return { success: true, count: 0, embedded: 0 };
 
-    let vectors = [];
+    // 先写入原始记忆，再尝试补 embedding。这样即使云函数 3 秒超时或向量接口慢，也不会丢失 T1。
+    const docIds = [];
+    for (const record of records) {
+      const docId = await upsertMemoryRecord(record);
+      docIds.push(docId);
+    }
+
+    let embedded = 0;
     try {
-      if (!EMBEDDING_API_KEY) throw new Error('缺少 EMBEDDING_API_KEY');
-      const embedRes = await axios.post('https://api.siliconflow.com/v1/embeddings', {
-        model: 'Qwen/Qwen3-Embedding-8B',
-        input: records.map(item => item.content)
-      }, { headers: { Authorization: `Bearer ${EMBEDDING_API_KEY}` } });
-      vectors = embedRes.data.data || [];
+      const vectors = await requestEmbeddings(records);
+      for (let i = 0; i < records.length; i++) {
+        if (await updateRecordEmbedding(docIds[i], vectors[i]?.embedding)) embedded += 1;
+      }
     } catch (embeddingError) {
-      console.warn('⚠️ 向量化失败，将先写入无 embedding 的原始记忆:', embeddingError.message);
+      console.warn('⚠️ 向量化失败或超时，已保留无 embedding 的原始记忆:', embeddingError.message);
     }
 
-    let upserted = 0;
-
-    for (let i = 0; i < records.length; i++) {
-      const record = { ...records[i], embedding: vectors[i]?.embedding || null };
-
-      // 如果已经存在同一个 event_id，只更新该文档，避免前端重试造成重复记忆。
-      if (record.event_id) {
-        const existing = await db.collection('persona_memories').where({ event_id: record.event_id }).limit(1).get();
-        if (existing.data?.length) {
-          await db.collection('persona_memories').doc(existing.data[0]._id).update({
-            ...record,
-            updateTime: db.serverDate(),
-          });
-          upserted++;
-          continue;
-        }
-      }
-
-      // embedding 不可用时也必须保底写入原始 T1，否则记忆库会看起来完全不增长。
-      if (!record.embedding) {
-        await db.collection('persona_memories').add(record);
-        upserted++;
-        continue;
-      }
-
-      const recentRes = await db.collection('persona_memories').where({ user_id: record.user_id }).limit(100).get();
-      const legacyRes = recentRes.data?.length
-        ? recentRes
-        : await db.collection('persona_memories').where({ personaId: record.personaId }).limit(100).get();
-
-      const scored = (legacyRes.data || [])
-        .filter(memory => Array.isArray(memory.embedding))
-        .map(memory => ({
-          id: memory._id,
-          content: memory.content || memory.text || '',
-          score: cosineSimilarity(record.embedding, memory.embedding),
-        }))
-        .sort((a, b) => b.score - a.score);
-
-      const topMatch = scored[0];
-      // 不再为了判断覆盖关系调用 DeepSeek，避免记忆后台任务挤占聊天主链路。
-      // 高相似度且同一 event_id 的情况已在上方更新；普通相似内容保留为新 T1。
-      if (topMatch && topMatch.score > 0.98 && topMatch.content === record.content) {
-        await db.collection('persona_memories').doc(topMatch.id).update({
-          embedding: record.embedding,
-          updateTime: db.serverDate(),
-        });
-      } else {
-        await db.collection('persona_memories').add(record);
-      }
-      upserted++;
-    }
-
-    return { success: true, count: upserted };
+    return {
+      success: true,
+      count: records.length,
+      embedded,
+      fallback: embedded === 0,
+    };
   } catch (error) {
     console.error('🚨 记忆处理异常:', error);
     return { success: false, error: error.message };
