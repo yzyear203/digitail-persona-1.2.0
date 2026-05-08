@@ -1,9 +1,6 @@
 // ==========================================
-// 方案 A 全量覆盖：src/lib/dsm.js
-// 目标：实装 DSM 2.2 核心数据结构、紧凑 Prompt 压缩引擎，并修复导出缺失的构建异常
+// DSM 2.2 核心工具：Schema、Prompt 压缩、守门人与记忆记录规范化
 // ==========================================
-
-import { db } from './cloudbase';
 
 // ==========================================
 // 1. DSM 2.2 核心 Schema 定义 (防空指针预设)
@@ -20,8 +17,23 @@ export const DEFAULT_T3_PROFILE = {
         bond_momentum: "stable"
     },
     current_context: { value: "", expires_at: "" },
-    forbidden_topics: []
+    forbidden_topics: [],
+    pending_conflicts: []
 };
+
+const CONFIDENCE_LABEL = {
+    high: '',
+    medium: '[可能]',
+};
+
+function shouldInjectField(field) {
+    return Boolean(field?.value && field.confidence !== 'low');
+}
+
+function formatProfileField(label, field) {
+    if (!shouldInjectField(field)) return '';
+    return `${label}:${field.value}${CONFIDENCE_LABEL[field.confidence] || ''} | `;
+}
 
 // ==========================================
 // 2. 紧凑 Prompt 压缩引擎 (机制③)
@@ -32,21 +44,19 @@ export function formatT3Compact(t3) {
     const safeT3 = { ...DEFAULT_T3_PROFILE, ...t3 };
     let compactStr = `[用户档案] `;
 
-    if (safeT3.identity.value) compactStr += `${safeT3.identity.value} | `;
+    compactStr += formatProfileField('身份', safeT3.identity);
 
     if (safeT3.interests && safeT3.interests.length > 0) {
         const topInterests = [...safeT3.interests]
-            .sort((a, b) => b.weight - a.weight)
+            .filter(i => i?.topic && i.confidence !== 'low')
+            .sort((a, b) => (b.weight || 0) - (a.weight || 0))
             .slice(0, 3)
-            .map(i => `${i.topic}(★${i.weight})`)
+            .map(i => `${i.topic}(★${i.weight || 1})${i.confidence === 'medium' ? '[可能]' : ''}`)
             .join('/');
-        compactStr += `兴趣:${topInterests} | `;
+        if (topInterests) compactStr += `兴趣:${topInterests} | `;
     }
 
-    if (safeT3.personality.value) {
-        const confMark = safeT3.personality.confidence === 'high' ? '' : '[推断]';
-        compactStr += `性格:${safeT3.personality.value}${confMark} | `;
-    }
+    compactStr += formatProfileField('性格', safeT3.personality);
 
     if (safeT3.relationship) {
         compactStr += `关系:${safeT3.relationship.archetype} 亲密度${safeT3.relationship.intimacy_level}/10 | `;
@@ -83,10 +93,19 @@ export const T2_TOOL_DECLARATION = `
 {"tool_name":"retrieve_long_term_memory","description":"检索用户的长期语义记忆","trigger_when":"用户询问历史事件、话题涉及专业/旅行/重大决策时","input":{"query":"string"}}
 `;
 
-export function getDaysSince(dateString) {
+export const NATURAL_REPLY_GUARD = `
+【自然回复节奏】
+- 允许自然的开头废话、调侃、反问和情绪铺垫，只要符合当前人格与上下文即可。
+- 不要为了“干净”而强行删掉寒暄、口头禅或轻微自我表演；这些可以作为人格表达的一部分保留。
+- 若需要分多段表达，请用 ||| 分隔成独立气泡；每个气泡尽量只承载一个情绪/信息点。
+`;
+
+export function getDaysSince(dateString, now = Date.now()) {
     if (!dateString) return 0;
-    const diffTime = Math.abs(new Date() - new Date(dateString));
-    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    const parsedTime = new Date(dateString).getTime();
+    if (Number.isNaN(parsedTime)) return 0;
+    const diffTime = Math.max(0, now - parsedTime);
+    return Math.floor(diffTime / (1000 * 60 * 60 * 24));
 }
 
 export function buildRegressionBlock(days, contextValue) {
@@ -102,7 +121,7 @@ export function buildRegressionBlock(days, contextValue) {
 const SIGNAL_PATTERNS = [
     /[\u4e00-\u9fa5]{2,4}(大学|公司|医院|景区|城市)/,
     /(今天|昨天|明天|下周|上周|最近|这几天|五一|春节)/,
-    /(失恋|分手|Offer|录取|失业|离职|搬家|转专业|怀孕|生病|手术)/,
+    /(失恋|分手|Offer|offer|录取|失业|离职|搬家|转专业|怀孕|生病|手术)/,
     /我(打算|要|准备|决定|想).{2,15}(了|去|做)/,
 ];
 
@@ -127,7 +146,8 @@ export function getHotT1(userId) {
             return null;
         }
         return data.items || [];
-    } catch (e) {
+    } catch (error) {
+        console.warn('Hot T1 Cache Read Error:', error);
         return null;
     }
 }
@@ -145,8 +165,8 @@ export function saveToHotT1Cache(userId, summary) {
         // 防止上下文爆满，最多保留 5 条近期 T1
         if (data.items.length > 5) data.items = data.items.slice(-5);
         localStorage.setItem(key, JSON.stringify(data));
-    } catch (e) {
-        console.error("Hot T1 Cache Error:", e);
+    } catch (error) {
+        console.error("Hot T1 Cache Error:", error);
     }
 }
 
@@ -155,7 +175,11 @@ export function saveToHotT1Cache(userId, summary) {
 // ==========================================
 export function buildSystemPrompt(activePersona, hotT1, isCooling, daysSinceLastChat) {
     let t3 = {};
-    try { t3 = JSON.parse(activePersona?.content || '{}'); } catch(e) {}
+    try {
+        t3 = JSON.parse(activePersona?.content || '{}');
+    } catch (error) {
+        console.warn('T3 JSON 解析失败，使用空档案继续组装 Prompt:', error);
+    }
     
     let prompt = formatT3Compact(t3) + "\n\n";
 
@@ -166,6 +190,8 @@ export function buildSystemPrompt(activePersona, hotT1, isCooling, daysSinceLast
     if (isCooling) prompt += COOLING_INSTRUCTION + "\n\n";
 
     prompt += T2_TOOL_DECLARATION + "\n\n";
+
+    prompt += NATURAL_REPLY_GUARD + "\n\n";
 
     if (hotT1 && hotT1.length > 0) {
         prompt += "[近期事件]\n" + hotT1.map(item => `- [${new Date(item.timestamp).toISOString().split('T')[0]}] ${item.summary}`).join('\n') + "\n\n";
@@ -204,15 +230,122 @@ export function applyBudgetAllocator(messages, sysPromptTokens, maxBudget = 4000
 }
 
 // ==========================================
-// 8. 记忆提取引擎接口 (预留位)
+// 8. Assistant 回复保真与气泡拆分
+// ==========================================
+function isStructuredOrCodeReply(text) {
+    return /```|^\s{0,3}#{1,6}\s|^\s{0,3}[-*+]\s|^\s{0,3}\d+\.\s|\|[^\n]+\|/m.test(text);
+}
+
+function hasInteractiveTypingMarker(text) {
+    return /<del>[\s\S]*?<\/del>|<\/?recall>|\[quote:.*?\]/.test(text);
+}
+
+function hasOnlyControlMarker(text) {
+    return !text.replace(/<\/?recall>|\[quote:.*?\]|<del>[\s\S]*?<\/del>/g, '').trim();
+}
+
+function splitByExplicitSeparators(text) {
+    const rawParts = text.split(/\|\|\|/).map(part => part.trim()).filter(Boolean);
+    const mergedParts = [];
+
+    for (const part of rawParts) {
+        if (hasOnlyControlMarker(part) && mergedParts.length === 0) {
+            mergedParts.push(part);
+        } else if (mergedParts.length > 0 && hasOnlyControlMarker(mergedParts[mergedParts.length - 1])) {
+            mergedParts[mergedParts.length - 1] = `${mergedParts[mergedParts.length - 1]}\n${part}`;
+        } else {
+            mergedParts.push(part);
+        }
+    }
+
+    return mergedParts;
+}
+
+export function splitAssistantReply(responseText) {
+    const cleanedText = String(responseText || '').trim();
+    if (!cleanedText) return [];
+
+    if (cleanedText.includes('|||')) {
+        return splitByExplicitSeparators(cleanedText);
+    }
+
+    // 删除、引用、撤回依赖原始标记和后续正文处在同一个消息里，不能按空行自动拆散。
+    if (hasInteractiveTypingMarker(cleanedText)) return [cleanedText];
+
+    if (isStructuredOrCodeReply(cleanedText)) return [cleanedText];
+
+    const paragraphParts = cleanedText.split(/\n{2,}/).map(part => part.trim()).filter(Boolean);
+    if (paragraphParts.length <= 1) return [cleanedText];
+
+    const shouldSplitByParagraph = paragraphParts.every(part => part.length <= 220) && paragraphParts.length <= 4;
+    return shouldSplitByParagraph ? paragraphParts : [cleanedText];
+}
+
+// ==========================================
+// 9. DSM 2.2 标准记忆记录构造/兼容层
+// ==========================================
+export function buildT1MemoryRecord({ personaId, t1Event, sessionId = 'sess_active', deviceFp = '' }) {
+    const currentTimestamp = Date.now();
+    const timeFloor10s = Math.floor(currentTimestamp / 10000) * 10000;
+    const idempotencyKeyRaw = `${sessionId}_${timeFloor10s}_${personaId}`;
+    const eventId = `evt_${currentTimestamp}_${personaId}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+    const expiresAt = new Date(currentTimestamp + 7 * 24 * 3600 * 1000).toISOString();
+
+    return {
+        event_id: eventId,
+        idempotency_key: btoa(encodeURIComponent(idempotencyKeyRaw)).substring(0, 64),
+        user_id: personaId,
+        personaId, // 兼容旧云函数/存量数据，后续迁移完成后可删除
+        memory_type: 't1_episodic',
+        content: t1Event.summary,
+        text: t1Event.summary, // 兼容旧云函数/存量数据，后续迁移完成后可删除
+        importance_score: t1Event.importance,
+        emotion: t1Event.emotion || 'neutral',
+        confidence: t1Event.confidence || 'high',
+        memory_strength: 1,
+        decay_rate: t1Event.importance >= 8 ? 0.03 : 0.12,
+        timestamp: new Date(currentTimestamp).toISOString(),
+        expires_at: expiresAt,
+        session_id: sessionId,
+        device_fp: deviceFp,
+        device_fingerprint: deviceFp,
+        createTime: new Date(),
+    };
+}
+
+export function normalizeMemoryRecord(memory) {
+    const content = memory?.content || memory?.text || memory?.summary || '';
+    return {
+        ...memory,
+        user_id: memory?.user_id || memory?.personaId,
+        personaId: memory?.personaId || memory?.user_id,
+        content,
+        text: memory?.text || content,
+        memory_type: memory?.memory_type || 't1_episodic',
+        timestamp: memory?.timestamp || memory?.createTime || memory?.updateTime,
+    };
+}
+
+export function estimateKeywordScore(content, query) {
+    if (!content || !query) return 0;
+    const keywords = Array.from(new Set(String(query).split('').filter(k => k.trim())));
+    if (!keywords.length) return 0;
+    const hits = keywords.filter(kw => content.includes(kw)).length;
+    return hits / keywords.length;
+}
+
+// ==========================================
+// 10. 记忆提取引擎接口 (预留位)
 // ==========================================
 export async function extractT1FromMessages(messages) {
-    console.log("[DSM 守门人] 触发 T1 提取模拟调用...");
+    const latestUserText = messages?.filter(m => m.role === 'user').slice(-1)[0]?.text || '';
+    console.log("[DSM 守门人] 触发 T1 提取模拟调用...", latestUserText);
     return {
         event_id: `evt_${Date.now()}`,
         content: `事件提炼占位`,
         importance_score: 6,
         emotion: "neutral",
+        confidence: "medium",
         timestamp: new Date().toISOString()
     };
 }

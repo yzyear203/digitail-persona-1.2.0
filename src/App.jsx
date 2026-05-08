@@ -82,6 +82,7 @@ export default function App() {
             showMsg('❌ 该数字资产已销毁或设置了私密');
           }
         } catch (error) {
+          console.error('分享链路唤醒失败:', error);
           showMsg('❌ 唤醒失败，请检查 TCB 数据库是否已设置为“公有读”');
         }
       }
