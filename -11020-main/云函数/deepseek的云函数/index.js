@@ -30,6 +30,23 @@ function cosineSimilarity(vecA, vecB) {
   return denominator ? dot / denominator : 0;
 }
 
+
+function isDeepSeekBusyError(error = {}) {
+  const message = typeof error === 'string'
+    ? error
+    : (error.message || error.error?.message || JSON.stringify(error));
+  return /Service is too busy|busy|temporarily switch|server is overloaded|rate limit|429|503/i.test(message);
+}
+
+async function postDeepSeek(payload) {
+  const res = await fetch('https://api.deepseek.com/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${DEEPSEEK_API_KEY}` },
+    body: JSON.stringify(payload)
+  });
+  return await res.json();
+}
+
 function keywordScore(content, query) {
   const keywords = Array.from(new Set(String(query || '').split('').filter(Boolean)));
   if (!keywords.length || !content) return 0;
@@ -71,7 +88,7 @@ async function retrieveLongTermMemory(personaId, query) {
 }
 
 exports.main = async (event = {}, _context = {}) => {
-  const { messages = [], model, personaId = 'default' } = event;
+  const { messages = [], model, personaId = 'default', enableMemoryTools = true } = event;
   const actualModel = model === 'deepseek-v4-pro' ? 'deepseek-reasoner' : 'deepseek-chat';
 
   const tools = [{
@@ -88,12 +105,16 @@ exports.main = async (event = {}, _context = {}) => {
   }];
 
   try {
-    const initialRes = await fetch('https://api.deepseek.com/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${DEEPSEEK_API_KEY}` },
-      body: JSON.stringify({ model: actualModel, messages, tools, tool_choice: 'auto' })
-    });
-    const initialData = await initialRes.json();
+    const initialPayload = enableMemoryTools
+      ? { model: actualModel, messages, tools, tool_choice: 'auto' }
+      : { model: actualModel, messages };
+    let initialData = await postDeepSeek(initialPayload);
+
+    if (initialData.error && actualModel === 'deepseek-reasoner' && isDeepSeekBusyError(initialData.error)) {
+      console.warn('DeepSeek reasoner 忙碌，云函数自动降级到 deepseek-chat 重试一次:', initialData.error.message);
+      initialData = await postDeepSeek({ ...initialPayload, model: 'deepseek-chat' });
+    }
+
     if (initialData.error) return initialData;
 
     const responseMessage = initialData.choices[0].message;
@@ -115,12 +136,12 @@ exports.main = async (event = {}, _context = {}) => {
         }
       }
 
-      const finalRes = await fetch('https://api.deepseek.com/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${DEEPSEEK_API_KEY}` },
-        body: JSON.stringify({ model: actualModel, messages })
-      });
-      return await finalRes.json();
+      let finalData = await postDeepSeek({ model: actualModel, messages });
+      if (finalData.error && actualModel === 'deepseek-reasoner' && isDeepSeekBusyError(finalData.error)) {
+        console.warn('DeepSeek reasoner 二跳忙碌，云函数自动降级到 deepseek-chat 重试一次:', finalData.error.message);
+        finalData = await postDeepSeek({ model: 'deepseek-chat', messages });
+      }
+      return finalData;
     }
 
     return initialData;

@@ -37,6 +37,8 @@ export const callDoubaoAPI = async (promptText, systemInstructionText = null, im
 };
 
 // ================== DeepSeek 双轨制引擎 ==================
+const isDeepSeekBusyError = (message = '') => /Service is too busy|busy|temporarily switch|server is overloaded|rate limit|429|503/i.test(String(message));
+
 export const callDeepSeekAPI = async (promptText, systemInstructionText = null, mode = 'pro', signal = null, personaId = 'default') => {
   const apiMessages = [];
   if (systemInstructionText) apiMessages.push({ role: "system", content: systemInstructionText });
@@ -53,21 +55,35 @@ export const callDeepSeekAPI = async (promptText, systemInstructionText = null, 
     }
 
     try {
-      const res = await cloudbase.callFunction({
-        name: 'deepseek_generate',
-        data: {
-          messages: apiMessages,
-          model: isPro ? 'deepseek-v4-pro' : 'deepseek-v4-flash',
-          useThinking: isPro,
-          personaId: personaId
-        },
-        timeout: isPro ? 60000 : 15000
-      });
+      const callDeepSeekFunction = (modelMode) => {
+        const useProModel = modelMode === 'pro';
+        return cloudbase.callFunction({
+          name: 'deepseek_generate',
+          data: {
+            messages: apiMessages,
+            model: useProModel ? 'deepseek-v4-pro' : 'deepseek-v4-flash',
+            useThinking: useProModel,
+            personaId: personaId,
+            enableMemoryTools: useProModel
+          },
+          timeout: useProModel ? 60000 : 15000
+        });
+      };
+
+      let res = await callDeepSeekFunction(mode);
 
       // 异步回来后再次检查是否已被阻断，如果是，抛弃数据
       if (signal && signal.aborted) return reject(new DOMException('Aborted', 'AbortError'));
 
-      const data = res.result;
+      let data = res.result;
+      if (data && data.error) {
+        const errorMessage = data.error.message || JSON.stringify(data.error);
+        if (isPro && isDeepSeekBusyError(errorMessage)) {
+          console.warn('DeepSeek Pro 忙碌，自动降级到 Flash 重试一次:', errorMessage);
+          res = await callDeepSeekFunction('flash');
+          data = res.result;
+        }
+      }
       if (data && data.error) throw new Error(data.error.message || JSON.stringify(data.error));
 
       let responseText = data.choices?.[0]?.message?.content || "";
@@ -137,7 +153,8 @@ export const callDeepSeekAPI = async (promptText, systemInstructionText = null, 
               messages: apiMessages,
               model: isPro ? 'deepseek-v4-pro' : 'deepseek-v4-flash',
               useThinking: isPro,
-              personaId
+              personaId,
+              enableMemoryTools: false
             },
             timeout: isPro ? 60000 : 15000
         });
