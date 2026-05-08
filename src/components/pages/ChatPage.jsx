@@ -212,41 +212,17 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
             }
           }
 
-          try {
-            const memoryRecord = buildT1MemoryRecord({
-              personaId: activeId,
-              t1Event,
-              deviceFp: navigator.userAgent.substring(0, 64),
-            });
-
-            const { cloudbase } = await import('../../lib/cloudbase');
-            if (!cloudbase) throw new Error('CloudBase SDK 未初始化，无法写入记忆');
-
-            const vectorizeRes = await cloudbase.callFunction({
-              name: 'vectorize',
-              data: { personaId: activeId, records: [memoryRecord] },
-              timeout: 15000,
-            });
-
-            if (vectorizeRes.result?.success === false) {
-              throw new Error(vectorizeRes.result.error || 'vectorize 云函数返回失败');
-            }
-
-            console.log('T1 深态记忆已由云函数写入数据库');
-          } catch (err) {
-            console.error('云函数记忆写入失败，尝试前端直写兜底:', err);
-            if (db) {
-              try {
-                const fallbackRecord = buildT1MemoryRecord({
-                  personaId: activeId,
-                  t1Event,
-                  deviceFp: navigator.userAgent.substring(0, 64),
-                });
-                await db.collection('persona_memories').add(fallbackRecord);
-                console.log('T1 深态记忆已通过前端兜底写入数据库');
-              } catch (fallbackError) {
-                console.error('记忆写入彻底失败:', fallbackError);
-              }
+          if (db) {
+            try {
+              const memoryRecord = buildT1MemoryRecord({
+                personaId: activeId,
+                t1Event,
+                deviceFp: navigator.userAgent.substring(0, 64),
+              });
+              await db.collection('persona_memories').add(memoryRecord);
+              console.log('T1 深态记忆已直接写入数据库');
+            } catch (err) {
+              console.error('T1 深态记忆写入数据库失败:', err);
             }
           }
         }
