@@ -8,7 +8,7 @@
 export const DEFAULT_T3_PROFILE = {
     identity: { value: "", confidence: "low", last_updated: "", source_event_ids: [] },
     personality: { value: "", confidence: "low", last_updated: "", source_event_ids: [] },
-    interests: [], 
+    interests: [],
     relationship: {
         archetype: "观察者",
         intimacy_level: 1,
@@ -101,8 +101,11 @@ export const NATURAL_REPLY_GUARD = `
 - 允许自然的开头废话、调侃、反问和情绪铺垫，只要符合当前人格与上下文即可。
 - 不要为了“干净”而强行删掉寒暄、口头禅或轻微自我表演；这些可以作为人格表达的一部分保留。
 - 如果回复超过 2 句话，必须使用 ||| 分隔成多个独立聊天气泡。
+- 如果你想表达两个独立情绪/信息点，即使只有两行，也必须用 ||| 分开，不要把它们写进同一个气泡。
 - 每个气泡只承载一个情绪/信息点。
 - 不要使用普通换行来模拟气泡，必须使用 |||。
+- 当用户连续发送多条消息，或你要专门回应其中某一句时，可以在相关气泡开头使用 [quote:用户原话短片段]。
+- 允许偶尔使用 <recall>...</recall> 表现刚发出又撤回的人味反应；不要连续撤回，也不要每轮都撤回。
 `;
 
 export function getDaysSince(dateString, now = Date.now()) {
@@ -186,7 +189,7 @@ export function buildSystemPrompt(activePersona, hotT1, isCooling, daysSinceLast
     } catch (error) {
         console.warn('T3 JSON 解析失败，使用空档案继续组装 Prompt:', error);
     }
-    
+
     let prompt = formatT3Compact(t3) + "\n\n";
 
     if (daysSinceLastChat > 7) {
@@ -209,7 +212,7 @@ export function buildSystemPrompt(activePersona, hotT1, isCooling, daysSinceLast
     if (t3.forbidden_topics && t3.forbidden_topics.length > 0) {
         prompt += `【绝对禁忌】严禁在对话中提及以下内容：${t3.forbidden_topics.join('、')}。\n\n`;
     }
-    
+
     return prompt.trim();
 }
 
@@ -219,12 +222,12 @@ export function buildSystemPrompt(activePersona, hotT1, isCooling, daysSinceLast
 export function applyBudgetAllocator(messages, sysPromptTokens, maxBudget = 4000) {
     let remainingBudget = maxBudget - sysPromptTokens;
     const result = [];
-    
+
     // 逆序遍历：优先保留最新消息，砍掉过早的对话历史
     for (let i = messages.length - 1; i >= 0; i--) {
         const msg = messages[i];
         // 粗略估算：1 个中文字符约为 1.5 ~ 2 tokens
-        const msgTokens = Math.ceil((msg.text || msg.content || "").length / 1.5); 
+        const msgTokens = Math.ceil((msg.text || msg.content || "").length / 1.5);
         if (remainingBudget - msgTokens > 0) {
             result.unshift(msg);
             remainingBudget -= msgTokens;
@@ -271,50 +274,55 @@ function mergeControlOnlyParts(parts) {
 
 function splitByExplicitSeparators(text) {
     const rawParts = text.split(/\|\|\|/).map(part => part.trim()).filter(Boolean);
-    return mergeControlOnlyParts(rawParts);
+    return mergeControlOnlyParts(rawParts).flatMap(part => splitLooseChatParagraphs(part));
 }
 
-function protectDeleteSpans(text) {
+function protectControlSpans(text) {
     const spans = [];
-    const protectedText = text.replace(/<del>[\s\S]*?<\/del>/g, span => {
-        const token = `@@DSM_DEL_${spans.length}@@`;
+    const protectedText = text.replace(/<del>[\s\S]*?<\/del>|<recall>[\s\S]*?<\/recall>|\[quote:[\s\S]*?\]/g, span => {
+        const token = `@@DSM_CTRL_${spans.length}@@`;
         spans.push(span);
         return token;
     });
 
     return {
         protectedText,
-        restore: value => spans.reduce((result, span, index) => result.replace(`@@DSM_DEL_${index}@@`, span), value),
+        restore: value => spans.reduce((result, span, index) => result.replace(`@@DSM_CTRL_${index}@@`, span), value),
     };
 }
 
-function splitByParagraphsPreservingMarkers(text) {
-    const { protectedText, restore } = protectDeleteSpans(text);
+function canUseAsChatBubbles(parts) {
+    return parts.length > 1
+        && parts.length <= 8
+        && parts.every(part => part.length <= 360)
+        && parts.every(part => !hasOnlyControlMarker(part));
+}
 
-    // 优先按空行拆分：适合模型输出多个自然段的情况
-    let paragraphParts = protectedText
+function splitLooseChatParagraphs(text) {
+    if (!text || isStructuredOrCodeReply(text)) return [text];
+    if (/<recall>[\s\S]*?<\/recall>/.test(text)) return [text];
+
+    const { protectedText, restore } = protectControlSpans(text);
+
+    const paragraphParts = protectedText
         .split(/(?:\n\s*){2,}/)
         .map(part => restore(part).trim())
         .filter(Boolean);
 
-    // 如果模型没有用空行，只用了普通换行，也尝试按普通换行拆
-    if (paragraphParts.length <= 1 && protectedText.includes('\n')) {
-        paragraphParts = protectedText
-            .split(/\n+/)
-            .map(part => restore(part).trim())
-            .filter(Boolean);
-    }
+    if (canUseAsChatBubbles(paragraphParts)) return paragraphParts;
 
-    if (paragraphParts.length <= 1) return [text];
+    const lineParts = protectedText
+        .split(/\n+/)
+        .map(part => restore(part).trim())
+        .filter(Boolean);
 
-    const mergedParts = mergeControlOnlyParts(paragraphParts);
-
-    // 聊天气泡允许更自然地拆分，避免超过 4 段就被合并成一个大气泡
-    if (mergedParts.length <= 8 && mergedParts.every(part => part.length <= 360)) {
-        return mergedParts;
-    }
+    if (canUseAsChatBubbles(lineParts)) return lineParts;
 
     return [text];
+}
+
+function splitByParagraphsPreservingMarkers(text) {
+    return splitLooseChatParagraphs(text);
 }
 
 export function splitAssistantReply(responseText) {
