@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 
 function toCharacters(text) {
   const source = String(text || '');
@@ -55,9 +55,16 @@ function getTypeDelay(char, baseSpeed, typedCount) {
   return Math.max(16, delay);
 }
 
+function runAfterPaint(callback, delay) {
+  const timeoutId = window.setTimeout(() => {
+    window.requestAnimationFrame(callback);
+  }, Math.max(16, delay));
+  return timeoutId;
+}
+
 export default function TypingText({ content, persona, onComplete, scrollRef }) {
-  const [displayText, setDisplayText] = useState('');
-  const [isTyping, setIsTyping] = useState(true);
+  const textRef = useRef(null);
+  const cursorRef = useRef(null);
   const onCompleteRef = useRef(onComplete);
 
   useEffect(() => { onCompleteRef.current = onComplete; }, [onComplete]);
@@ -71,19 +78,35 @@ export default function TypingText({ content, persona, onComplete, scrollRef }) 
     const actions = buildActions(content);
     const { baseSpeed, deleteSpeed } = getPersonaSpeeds(persona);
 
-    setDisplayText('');
-    setIsTyping(true);
+    if (textRef.current) textRef.current.textContent = '';
+    if (cursorRef.current) cursorRef.current.style.display = 'inline-block';
+
+    const writeTextNow = nextText => {
+      currentText = nextText;
+      // 不再依赖 React 每字 setState。直接写 DOM 文本节点，避免 React 批处理导致“第一个字卡住，最后整段蹦出”。
+      // 注意：这个 span 不能有 React children，否则父组件重渲染会用旧 state 把命令式写入的文本清空。
+      if (textRef.current) textRef.current.textContent = nextText;
+      scrollRef?.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+    };
 
     const scheduleNext = delay => {
-      timerId = window.setTimeout(runAction, Math.max(16, delay));
+      timerId = runAfterPaint(runAction, delay);
+    };
+
+    const finish = () => {
+      if (!isMounted) return;
+      if (cursorRef.current) cursorRef.current.style.display = 'none';
+      // 让最终字符和光标隐藏至少经历一次浏览器绘制，再通知父组件切换为静态文本。
+      window.requestAnimationFrame(() => {
+        if (isMounted) onCompleteRef.current?.();
+      });
     };
 
     const runAction = () => {
       if (!isMounted) return;
 
       if (index >= actions.length) {
-        setIsTyping(false);
-        onCompleteRef.current?.();
+        finish();
         return;
       }
 
@@ -92,23 +115,20 @@ export default function TypingText({ content, persona, onComplete, scrollRef }) 
       let delay = baseSpeed;
 
       if (action.type === 'type') {
-        currentText += action.char;
         typedCount += 1;
-        setDisplayText(currentText);
+        writeTextNow(currentText + action.char);
         delay = getTypeDelay(action.char, baseSpeed, typedCount);
       } else if (action.type === 'delete') {
-        currentText = toCharacters(currentText).slice(0, -1).join('');
-        setDisplayText(currentText);
+        writeTextNow(toCharacters(currentText).slice(0, -1).join(''));
         delay = deleteSpeed;
       } else if (action.type === 'pause') {
         delay = action.ms;
       }
 
-      scrollRef?.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
       scheduleNext(delay);
     };
 
-    // 旧版是立即 runAction()，不要先空等 80ms，避免只看到光标像卡住。
+    // 旧版是立即 runAction()，不要先空等 80ms；后续每帧直接写 DOM，避免 React 状态批处理卡住字符更新。
     runAction();
 
     return () => {
@@ -119,8 +139,8 @@ export default function TypingText({ content, persona, onComplete, scrollRef }) 
 
   return (
     <span className="whitespace-pre-wrap">
-      {displayText}
-      {isTyping && <span className="inline-block w-1.5 h-4 ml-1 bg-blue-400 animate-pulse align-middle"></span>}
+      <span ref={textRef} />
+      <span ref={cursorRef} className="inline-block w-1.5 h-4 ml-1 bg-blue-400 animate-pulse align-middle"></span>
     </span>
   );
 }
