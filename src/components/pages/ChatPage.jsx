@@ -18,10 +18,39 @@ import {
 
 const IMMEDIATE_MEMORY_WINDOW = 8;
 const USER_SETTLE_DELAY_MS = 3000;
+const DEBUG_FORCE_QUOTE_RECALL = true;
+const DEBUG_RECALL_FALLBACK_TEXT = '撤回测试：如果组件正常，这条会先打出来，然后变成撤回提示。';
 const CONTROL_MARKER_REGEX = /<del>[\s\S]*?<\/del>|<\/?recall>|\[quote:[\s\S]*?\]/g;
 
 function stripControlMarkers(text) {
   return String(text || '').replace(CONTROL_MARKER_REGEX, '').trim();
+}
+
+function getLastUserQuote(messagesSnapshot) {
+  const lastUserMsg = [...(messagesSnapshot || [])]
+    .reverse()
+    .find(m => m.role === 'user' && stripControlMarkers(m.text));
+
+  const quoteText = stripControlMarkers(lastUserMsg?.text) || '最近这条消息';
+  return quoteText.replace(/\s+/g, ' ').slice(0, 24);
+}
+
+function buildDebugQuoteRecallParts(replyParts, messagesSnapshot) {
+  const quoteText = getLastUserQuote(messagesSnapshot);
+  const baseParts = Array.isArray(replyParts) && replyParts.length > 0
+    ? replyParts.map(part => stripControlMarkers(part)).filter(Boolean)
+    : ['引用测试：如果组件正常，这条气泡顶部会显示引用框。'];
+
+  const testParts = baseParts.length >= 2
+    ? baseParts
+    : [baseParts[0], DEBUG_RECALL_FALLBACK_TEXT];
+
+  return testParts.map((part, index) => {
+    if (index % 2 === 0) {
+      return `[quote: ${quoteText}]${part}`;
+    }
+    return `<recall>${part || DEBUG_RECALL_FALLBACK_TEXT}</recall>`;
+  });
 }
 
 function getPersonaConversationState(persona) {
@@ -239,7 +268,10 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
         return;
       }
 
-      const replyParts = splitAssistantReply(responseText);
+      const rawReplyParts = splitAssistantReply(responseText);
+      const replyParts = DEBUG_FORCE_QUOTE_RECALL
+        ? buildDebugQuoteRecallParts(rawReplyParts, messagesRef.current)
+        : rawReplyParts;
       setIsTypingIndicator(false);
 
       for (let i = 0; i < replyParts.length; i++) {
