@@ -68,29 +68,41 @@ exports.main = async (event = {}, _context = {}) => {
     const records = incoming.map(item => normalizeIncomingMemory(personaId, item)).filter(item => item.content);
     if (!records.length) return { success: true, count: 0 };
 
-    const embedRes = await axios.post('https://api.siliconflow.com/v1/embeddings', {
-      model: 'Qwen/Qwen3-Embedding-8B',
-      input: records.map(item => item.content)
-    }, { headers: { Authorization: `Bearer ${EMBEDDING_API_KEY}` } });
+    let vectors = [];
+    try {
+      if (!EMBEDDING_API_KEY) throw new Error('缺少 EMBEDDING_API_KEY');
+      const embedRes = await axios.post('https://api.siliconflow.com/v1/embeddings', {
+        model: 'Qwen/Qwen3-Embedding-8B',
+        input: records.map(item => item.content)
+      }, { headers: { Authorization: `Bearer ${EMBEDDING_API_KEY}` } });
+      vectors = embedRes.data.data || [];
+    } catch (embeddingError) {
+      console.warn('⚠️ 向量化失败，将先写入无 embedding 的原始记忆:', embeddingError.message);
+    }
 
-    const vectors = embedRes.data.data || [];
     let upserted = 0;
 
     for (let i = 0; i < records.length; i++) {
-      const record = { ...records[i], embedding: vectors[i]?.embedding };
-      if (!record.embedding) continue;
+      const record = { ...records[i], embedding: vectors[i]?.embedding || null };
 
-      // 如果前端已经按 event_id 直写过标准 T1，这里只补 embedding，不重复新增。
+      // 如果已经存在同一个 event_id，只更新该文档，避免前端重试造成重复记忆。
       if (record.event_id) {
         const existing = await db.collection('persona_memories').where({ event_id: record.event_id }).limit(1).get();
         if (existing.data?.length) {
           await db.collection('persona_memories').doc(existing.data[0]._id).update({
-            embedding: record.embedding,
+            ...record,
             updateTime: db.serverDate(),
           });
           upserted++;
           continue;
         }
+      }
+
+      // embedding 不可用时也必须保底写入原始 T1，否则记忆库会看起来完全不增长。
+      if (!record.embedding) {
+        await db.collection('persona_memories').add(record);
+        upserted++;
+        continue;
       }
 
       const recentRes = await db.collection('persona_memories').where({ user_id: record.user_id }).limit(100).get();

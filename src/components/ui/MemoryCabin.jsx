@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { BrainCircuit, X, ShieldAlert, Heart, Zap, Trash2, Plus, Ban, Check, Loader2, Save, UserPen, MessageSquareX, DatabaseZap } from 'lucide-react';
 import { db } from '../../lib/cloudbase';
+import { upsertPersonaProfile } from '../../lib/profileStore';
 
 const PROFILE_SUMMARY_FIELDS = [
   { label: '打字速度', patterns: [/打字速度[:：]?([^\n。；;]+)/, /打字节奏[:：]?([^\n。；;]+)/] },
@@ -119,6 +120,11 @@ export default function MemoryCabin({ activePersona, setActivePersona, showMsg, 
         await db.collection('personas').doc(latestPersonaRef.current.id).update({
           content: mergedStr
         });
+        await upsertPersonaProfile({
+          personaId: latestPersonaRef.current.id,
+          t3Profile: JSON.parse(mergedStr || '{}'),
+          nickname: latestPersonaRef.current?.name,
+        });
       }
       showMsg('✅ 状态舱已同步');
     } catch (error) {
@@ -143,6 +149,11 @@ export default function MemoryCabin({ activePersona, setActivePersona, showMsg, 
       setActivePersona(prev => ({ ...prev, name: trimmedName }));
       if (db && latestPersonaRef.current?.id) {
         await db.collection('personas').doc(latestPersonaRef.current.id).update({ name: trimmedName });
+        await upsertPersonaProfile({
+          personaId: latestPersonaRef.current.id,
+          t3Profile: t3Data,
+          nickname: trimmedName,
+        });
       }
       showMsg('✅ Persona 昵称已更新');
     } catch (error) {
@@ -165,6 +176,7 @@ export default function MemoryCabin({ activePersona, setActivePersona, showMsg, 
       bond_momentum: 'stable'
     },
     current_context: { value: '', expires_at: '' },
+    user_name: '',
     forbidden_topics: [],
     pending_conflicts: []
   });
@@ -207,6 +219,7 @@ export default function MemoryCabin({ activePersona, setActivePersona, showMsg, 
 
       if (db && personaId) {
         await db.collection('personas').doc(personaId).update({ content: emptyT3Str });
+        await upsertPersonaProfile({ personaId, t3Profile: emptyT3, nickname: latestPersonaRef.current?.name });
         const removedIds = new Set();
         await removeMemoryDocsByField('user_id', personaId, removedIds);
         await removeMemoryDocsByField('personaId', personaId, removedIds);
@@ -377,6 +390,10 @@ export default function MemoryCabin({ activePersona, setActivePersona, showMsg, 
                   {t3Data.identity?.confidence === 'medium' && <span className="text-amber-500 text-[10px] bg-amber-50 px-2 py-0.5 rounded">AI 推断</span>}
                 </h3>
                 <div className="space-y-2 mb-5">
+                  <div className="flex justify-between gap-3 text-sm">
+                    <span className="text-slate-400 font-black shrink-0">称呼：</span>
+                    <span className="text-slate-700 font-bold text-right">{t3Data.user_name || '未获取'}</span>
+                  </div>
                   <div className="flex justify-between gap-3 text-sm">
                     <span className="text-slate-400 font-black shrink-0">身份：</span>
                     <span className="text-slate-700 font-bold text-right">{t3Data.identity?.value || '未获取'}</span>

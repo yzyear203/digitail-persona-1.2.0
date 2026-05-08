@@ -17,6 +17,7 @@ export const DEFAULT_T3_PROFILE = {
         bond_momentum: "stable"
     },
     current_context: { value: "", expires_at: "" },
+    user_name: "",
     forbidden_topics: [],
     pending_conflicts: []
 };
@@ -43,6 +44,8 @@ export function formatT3Compact(t3) {
 
     const safeT3 = { ...DEFAULT_T3_PROFILE, ...t3 };
     let compactStr = `[用户档案] `;
+
+    if (safeT3.user_name) compactStr += `称呼:${safeT3.user_name} | `;
 
     compactStr += formatProfileField('身份', safeT3.identity);
 
@@ -128,6 +131,7 @@ const SIGNAL_PATTERNS = [
     /(今天|昨天|明天|下周|上周|最近|这几天|五一|春节)/,
     /(失恋|分手|Offer|offer|录取|失业|离职|搬家|转专业|怀孕|生病|手术)/,
     /我(打算|要|准备|决定|想).{2,15}(了|去|做)/,
+    /(我叫|叫我|我的名字是|我名字叫|本人叫|我是)[\u4e00-\u9fa5A-Za-z0-9_·•]{1,16}/,
 ];
 
 export function hasContentSignal(messages) {

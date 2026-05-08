@@ -5,6 +5,8 @@ import ChatInput from '../chat/ChatInput';
 import TasksModal from '../ui/TasksModal';
 import MemoryCabin from '../ui/MemoryCabin';
 import { callDoubaoAPI, callDeepSeekAPI } from '../../lib/api';
+import { db } from '../../lib/cloudbase';
+import { upsertPersonaProfile } from '../../lib/profileStore';
 import {
   hasContentSignal,
   getHotT1,
@@ -21,6 +23,22 @@ const USER_SETTLE_DELAY_MS = 3000;
 const DEBUG_FORCE_QUOTE_RECALL = true;
 const DEBUG_RECALL_FALLBACK_TEXT = '撤回测试：如果组件正常，这条会先打出来，然后变成撤回提示。';
 const CONTROL_MARKER_REGEX = /<del>[\s\S]*?<\/del>|<\/?recall>|\[quote:[\s\S]*?\]/g;
+
+
+function extractDeclaredUserName(text) {
+  const normalizedText = String(text || '').trim();
+  const patterns = [
+    /(?:我叫|叫我|我的名字是|我名字叫|本人叫)([\u4e00-\u9fa5A-Za-z0-9_·•]{1,16})/,
+    /我是([\u4e00-\u9fa5A-Za-z0-9_·•]{1,16})(?:$|[，。,.!！?？\s])/,
+  ];
+
+  for (const pattern of patterns) {
+    const matched = normalizedText.match(pattern)?.[1]?.trim();
+    if (matched) return matched;
+  }
+
+  return '';
+}
 
 function stripControlMarkers(text) {
   return String(text || '').replace(CONTROL_MARKER_REGEX, '').trim();
@@ -194,28 +212,41 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
             }
           }
 
-          if (db) {
-            try {
-              const memoryRecord = buildT1MemoryRecord({
-                personaId: activeId,
-                t1Event,
-                deviceFp: navigator.userAgent.substring(0, 64),
-              });
+          try {
+            const memoryRecord = buildT1MemoryRecord({
+              personaId: activeId,
+              t1Event,
+              deviceFp: navigator.userAgent.substring(0, 64),
+            });
 
-              await db.collection('persona_memories').add(memoryRecord);
+            const { cloudbase } = await import('../../lib/cloudbase');
+            if (!cloudbase) throw new Error('CloudBase SDK 未初始化，无法写入记忆');
 
-              import('../../lib/cloudbase').then(({ cloudbase }) => {
-                if (!cloudbase) return;
-                cloudbase.callFunction({
-                  name: 'vectorize',
-                  data: { personaId: activeId, records: [memoryRecord] },
-                  timeout: 15000,
-                }).catch(vectorError => console.warn('T1 向量化补齐失败，保留原始结构化记忆:', vectorError));
-              });
+            const vectorizeRes = await cloudbase.callFunction({
+              name: 'vectorize',
+              data: { personaId: activeId, records: [memoryRecord] },
+              timeout: 15000,
+            });
 
-              console.log('T1 深态记忆已写入数据库');
-            } catch (err) {
-              console.error('记忆写入失败:', err);
+            if (vectorizeRes.result?.success === false) {
+              throw new Error(vectorizeRes.result.error || 'vectorize 云函数返回失败');
+            }
+
+            console.log('T1 深态记忆已由云函数写入数据库');
+          } catch (err) {
+            console.error('云函数记忆写入失败，尝试前端直写兜底:', err);
+            if (db) {
+              try {
+                const fallbackRecord = buildT1MemoryRecord({
+                  personaId: activeId,
+                  t1Event,
+                  deviceFp: navigator.userAgent.substring(0, 64),
+                });
+                await db.collection('persona_memories').add(fallbackRecord);
+                console.log('T1 深态记忆已通过前端兜底写入数据库');
+              } catch (fallbackError) {
+                console.error('记忆写入彻底失败:', fallbackError);
+              }
             }
           }
         }
@@ -313,12 +344,52 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     }
   };
 
+
+  const persistDeclaredUserName = (userName) => {
+    if (!userName) return;
+
+    let nextT3 = null;
+    setActivePersona(prev => {
+      try {
+        const t3 = JSON.parse(prev?.content || '{}');
+        t3.user_name = userName;
+        t3.identity = {
+          ...(t3.identity || {}),
+          value: t3.identity?.value || `用户称呼：${userName}`,
+          confidence: 'high',
+          last_updated: new Date().toISOString(),
+        };
+        nextT3 = t3;
+        return { ...prev, content: JSON.stringify(t3) };
+      } catch (parseError) {
+        console.warn('用户称呼写入 T3 失败:', parseError);
+        return prev;
+      }
+    });
+
+    Promise.resolve().then(async () => {
+      const personaId = activePersonaRef.current?.id || activeId;
+      if (!db || !personaId || !nextT3) return;
+      try {
+        await db.collection('personas').doc(personaId).update({ content: JSON.stringify(nextT3) });
+        await upsertPersonaProfile({
+          personaId,
+          t3Profile: nextT3,
+          nickname: activePersonaRef.current?.name,
+        });
+      } catch (error) {
+        console.warn('用户称呼同步云端失败:', error);
+      }
+    });
+  };
+
   const handleSendMessage = async (e) => {
     if (e) e.preventDefault();
     const userText = input.trim();
     if (!userText) return;
 
     setInput('');
+    persistDeclaredUserName(extractDeclaredUserName(userText));
 
     const currentNonce = Date.now();
     generationNonce.current = currentNonce;
