@@ -4,12 +4,58 @@
 // ==========================================
 
 import React, { useState, useEffect, useRef } from 'react';
-import { BrainCircuit, X, ShieldAlert, Heart, Zap, Trash2, Plus, Ban, Check, Loader2 } from 'lucide-react';
+import { BrainCircuit, X, ShieldAlert, Heart, Zap, Trash2, Plus, Ban, Check, Loader2, Save, UserPen, MessageSquareX, DatabaseZap } from 'lucide-react';
 import { db } from '../../lib/cloudbase';
 
-export default function MemoryCabin({ activePersona, setActivePersona, showMsg, onClose }) {
+const PROFILE_SUMMARY_FIELDS = [
+  { label: '打字速度', patterns: [/打字速度[:：]?([^\n。；;]+)/, /打字节奏[:：]?([^\n。；;]+)/] },
+  { label: '连发习惯', patterns: [/连发(?:的)?条数(?:范围)?[:：]?([^\n。；;]+)/, /一次性连发[:：]?([^\n。；;]+)/] },
+  { label: '口头禅', patterns: [/口头禅(?:和惯用词)?[:：]?([^\n。；;]+)/, /惯用词[:：]?([^\n。；;]+)/] },
+  { label: '收尾方式', patterns: [/句子收尾方式[:：]?([^\n。；;]+)/, /收尾(?:习惯|方式)?[:：]?([^\n。；;]+)/] },
+  { label: '标点习惯', patterns: [/标点使用习惯[:：]?([^\n。；;]+)/, /标点[:：]?([^\n。；;]+)/] },
+  { label: '情绪触发', patterns: [/情绪触发器[:：]?([^\n。；;]+)/, /触发器[:：]?([^\n。；;]+)/] },
+  { label: '删改习惯', patterns: [/删掉的是哪类真实发言[:：]?([^\n。；;]+)/, /潜意识犹豫[^:：]*[:：]?([^\n。；;]+)/] },
+  { label: '聊天体感', patterns: [/整体聊天感受[:：]?([^\n。；;]+)/, /给对方带来的整体聊天感受[:：]?([^\n。；;]+)/] },
+];
+
+function cleanProfileValue(value) {
+  return String(value || '')
+    .replace(/^[-•*\d.、\s]+/, '')
+    .replace(/^我(?:的|会|通常|必须)?/, '')
+    .replace(/^[:：\s]+/, '')
+    .trim();
+}
+
+function buildPersonalitySummary(personalityText) {
+  const text = String(personalityText || '');
+  if (!text.trim()) return [];
+
+  const summary = PROFILE_SUMMARY_FIELDS.map(field => {
+    const matched = field.patterns
+      .map(pattern => text.match(pattern)?.[1])
+      .find(Boolean);
+
+    if (!matched) return null;
+    return {
+      label: field.label,
+      value: cleanProfileValue(matched).slice(0, 80),
+    };
+  }).filter(item => item?.value);
+
+  if (summary.length > 0) return summary.slice(0, 8);
+
+  return text
+    .split(/\n|。|；|;/)
+    .map(line => cleanProfileValue(line))
+    .filter(Boolean)
+    .slice(0, 6)
+    .map((line, index) => ({ label: `摘要 ${index + 1}`, value: line.slice(0, 80) }));
+}
+
+export default function MemoryCabin({ activePersona, setActivePersona, showMsg, onClose, onClearChatHistory }) {
   const [isSaving, setIsSaving] = useState(false);
   const [newForbidden, setNewForbidden] = useState('');
+  const [personaName, setPersonaName] = useState(activePersona?.name || '');
 
   // 初始化本地可编辑的 T3 状态
   const [t3Data, setT3Data] = useState(() => {
@@ -25,6 +71,7 @@ export default function MemoryCabin({ activePersona, setActivePersona, showMsg, 
   const latestPersonaRef = useRef(activePersona);
   useEffect(() => {
     latestPersonaRef.current = activePersona;
+    setPersonaName(activePersona?.name || '');
   }, [activePersona]);
 
   // 👑 首席修复：仅在外部发生重大刷新且舱体未操作时，被动同步显示数据
@@ -73,9 +120,101 @@ export default function MemoryCabin({ activePersona, setActivePersona, showMsg, 
           content: mergedStr
         });
       }
-      showMsg('✅ 记忆舱矩阵已重新对齐，未发生并发踩踏');
+      showMsg('✅ 状态舱已同步');
     } catch (error) {
       showMsg('❌ 同步云端失败: ' + error.message);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+
+
+  const handleSavePersonaName = async (e) => {
+    e.preventDefault();
+    const trimmedName = personaName.trim();
+    if (!trimmedName) {
+      showMsg('昵称不能为空');
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      setActivePersona(prev => ({ ...prev, name: trimmedName }));
+      if (db && latestPersonaRef.current?.id) {
+        await db.collection('personas').doc(latestPersonaRef.current.id).update({ name: trimmedName });
+      }
+      showMsg('✅ Persona 昵称已更新');
+    } catch (error) {
+      showMsg('❌ 昵称保存失败: ' + error.message);
+      setPersonaName(latestPersonaRef.current?.name || '');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const buildEmptyT3Profile = () => ({
+    identity: { value: '', confidence: 'low', last_updated: '', source_event_ids: [] },
+    personality: { value: '', confidence: 'low', last_updated: '', source_event_ids: [] },
+    interests: [],
+    relationship: {
+      archetype: '观察者',
+      intimacy_level: 1,
+      interaction_count: 0,
+      last_chat_time: '',
+      bond_momentum: 'stable'
+    },
+    current_context: { value: '', expires_at: '' },
+    forbidden_topics: [],
+    pending_conflicts: []
+  });
+
+  const removeMemoryDocsByField = async (field, personaId, removedIds) => {
+    if (!db || !personaId) return 0;
+
+    let removedCount = 0;
+    for (let page = 0; page < 20; page += 1) {
+      const res = await db.collection('persona_memories').where({ [field]: personaId }).limit(100).get();
+      const records = res.data || [];
+      if (records.length === 0) break;
+
+      for (const record of records) {
+        const docId = record._id || record.id;
+        if (!docId || removedIds.has(docId)) continue;
+        await db.collection('persona_memories').doc(docId).remove();
+        removedIds.add(docId);
+        removedCount += 1;
+      }
+
+      if (records.length < 100) break;
+    }
+
+    return removedCount;
+  };
+
+  const handleClearAllMemory = async () => {
+    if (!window.confirm('确定清空全部记忆吗？这会清空 T3 状态档案、兴趣/禁忌/当前状态，以及长期记忆库；不会删除聊天记录。')) return;
+
+    const personaId = latestPersonaRef.current?.id;
+    const emptyT3 = buildEmptyT3Profile();
+    const emptyT3Str = JSON.stringify(emptyT3);
+
+    setIsSaving(true);
+    try {
+      setT3Data(emptyT3);
+      setActivePersona(prev => ({ ...prev, content: emptyT3Str }));
+      localStorage.removeItem(`hot_t1_${personaId}`);
+
+      if (db && personaId) {
+        await db.collection('personas').doc(personaId).update({ content: emptyT3Str });
+        const removedIds = new Set();
+        await removeMemoryDocsByField('user_id', personaId, removedIds);
+        await removeMemoryDocsByField('personaId', personaId, removedIds);
+      }
+
+      showMsg('✅ 全部记忆已清空，聊天记录已保留');
+    } catch (error) {
+      showMsg('❌ 清空记忆失败: ' + error.message);
     } finally {
       setIsSaving(false);
     }
@@ -149,7 +288,7 @@ export default function MemoryCabin({ activePersona, setActivePersona, showMsg, 
         <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50 relative overflow-hidden">
           {isSaving && <div className="absolute top-0 left-0 w-full h-1 bg-purple-500 animate-pulse"></div>}
           <h2 className="text-lg font-black text-slate-800 flex items-center gap-2">
-            <BrainCircuit className="text-purple-600"/> T3 记忆透明舱
+            <BrainCircuit className="text-purple-600"/> T3 状态舱
           </h2>
           <button onClick={onClose} className="p-2 text-slate-400 hover:text-slate-600 bg-white rounded-full shadow-sm">
             <X size={18}/>
@@ -158,6 +297,35 @@ export default function MemoryCabin({ activePersona, setActivePersona, showMsg, 
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-slate-50/50 pb-20">
+          <div className="bg-white p-5 rounded-2xl border border-purple-100 shadow-sm space-y-4">
+            <form onSubmit={handleSavePersonaName} className="space-y-2">
+              <label className="text-xs font-black uppercase text-purple-500 tracking-widest flex items-center gap-1">
+                <UserPen size={14}/> Persona 昵称
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={personaName}
+                  onChange={(e) => setPersonaName(e.target.value)}
+                  placeholder="给 TA 起一个名字"
+                  className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold text-slate-700 focus:outline-none focus:border-purple-300"
+                />
+                <button type="submit" disabled={isSaving || !personaName.trim()} className="bg-purple-600 text-white px-3 rounded-xl hover:bg-purple-700 disabled:opacity-50 flex items-center gap-1 text-xs font-black">
+                  {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16}/>} 保存
+                </button>
+              </div>
+            </form>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={onClearChatHistory} disabled={isSaving} className="bg-slate-100 text-slate-600 px-3 py-2.5 rounded-xl text-xs font-black hover:bg-slate-200 disabled:opacity-50 flex justify-center items-center gap-1">
+                <MessageSquareX size={15}/> 清空聊天
+              </button>
+              <button onClick={handleClearAllMemory} disabled={isSaving} className="bg-red-50 text-red-600 px-3 py-2.5 rounded-xl text-xs font-black hover:bg-red-100 disabled:opacity-50 flex justify-center items-center gap-1">
+                <DatabaseZap size={15}/> 清空记忆
+              </button>
+            </div>
+            <p className="text-[10px] text-slate-400 leading-relaxed">清空聊天只删除当前对话气泡，不影响 T3/T1 记忆；清空记忆会重置状态档案并清理长期记忆库。</p>
+          </div>
           
           {!t3Data || Object.keys(t3Data).length === 0 ? (
             <div className="text-center py-20 text-slate-400 font-bold">暂无结构化档案，触发冷启动中...</div>
@@ -208,12 +376,27 @@ export default function MemoryCabin({ activePersona, setActivePersona, showMsg, 
                   <span>核心身份档案</span>
                   {t3Data.identity?.confidence === 'medium' && <span className="text-amber-500 text-[10px] bg-amber-50 px-2 py-0.5 rounded">AI 推断</span>}
                 </h3>
-                <p className="text-sm font-bold text-slate-700 leading-relaxed mb-5">{t3Data.identity?.value || '未获取'}</p>
+                <div className="space-y-2 mb-5">
+                  <div className="flex justify-between gap-3 text-sm">
+                    <span className="text-slate-400 font-black shrink-0">身份：</span>
+                    <span className="text-slate-700 font-bold text-right">{t3Data.identity?.value || '未获取'}</span>
+                  </div>
+                  <div className="flex justify-between gap-3 text-sm">
+                    <span className="text-slate-400 font-black shrink-0">关系：</span>
+                    <span className="text-slate-700 font-bold text-right">{t3Data.relationship?.archetype || '未获取'} · 亲密度 {t3Data.relationship?.intimacy_level ?? 1}/10</span>
+                  </div>
+                </div>
                 
-                <h3 className="text-xs font-black uppercase text-slate-400 mb-3 tracking-widest">性格侧写</h3>
-                <p className="text-sm font-medium text-slate-600 leading-relaxed h-32 overflow-y-auto pr-2 custom-scrollbar">
-                  {t3Data.personality?.value || '未获取'}
-                </p>
+                <h3 className="text-xs font-black uppercase text-slate-400 mb-3 tracking-widest">性格侧写摘要</h3>
+                <div className="space-y-2 text-sm text-slate-600">
+                  {buildPersonalitySummary(t3Data.personality?.value).map(item => (
+                    <div key={item.label} className="flex justify-between gap-3 bg-slate-50 rounded-lg px-3 py-2">
+                      <span className="text-slate-400 font-black shrink-0">{item.label}：</span>
+                      <span className="font-medium leading-relaxed text-right">{item.value}</span>
+                    </div>
+                  ))}
+                  {!t3Data.personality?.value && <span className="text-xs text-slate-400">未获取</span>}
+                </div>
               </div>
 
               {/* === 已知兴趣/特征 (可删除) === */}
