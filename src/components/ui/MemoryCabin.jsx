@@ -15,7 +15,8 @@ export default function MemoryCabin({ activePersona, setActivePersona, showMsg, 
   const [t3Data, setT3Data] = useState(() => {
     try {
       return JSON.parse(activePersona?.content || '{}');
-    } catch (e) {
+    } catch (parseError) {
+      console.warn('透明舱 T3 初始化解析失败:', parseError);
       return {};
     }
   });
@@ -47,7 +48,11 @@ export default function MemoryCabin({ activePersona, setActivePersona, showMsg, 
       // 1. 同步前端聊天引擎的状态：使用 prev 函数式回调，获取执行瞬间的最绝对新鲜状态
       setActivePersona(prev => {
         let latestT3 = {};
-        try { latestT3 = JSON.parse(prev.content || '{}'); } catch(e) {}
+        try {
+          latestT3 = JSON.parse(prev.content || '{}');
+        } catch (parseError) {
+          console.warn('透明舱同步前解析最新 T3 失败:', parseError);
+        }
         
         // 将局部修改精准打补丁到最新状态上
         const updatedT3 = updaterFunction(latestT3);

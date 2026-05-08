@@ -2,43 +2,57 @@ const cloudbase = require('@cloudbase/node-sdk');
 const app = cloudbase.init({ env: cloudbase.SYMBOL_CURRENT_ENV });
 const db = app.database();
 
-exports.main = async (event, context) => {
-  // 复用你现有的 personaId 体系
-  const { personaId, currentContext } = event;
-  if (!personaId || !currentContext) return { success: false, msg: "参数缺失" };
+function buildCurrentContext(currentContext) {
+  const expiresAt = new Date();
+  expiresAt.setDate(expiresAt.getDate() + 7);
+  return {
+    value: currentContext,
+    expires_at: expiresAt.toISOString()
+  };
+}
+
+exports.main = async (event = {}, _context = {}) => {
+  const { personaId, userId, currentContext } = event;
+  const profileId = userId || personaId;
+  if (!profileId || !currentContext) return { success: false, msg: '参数缺失' };
 
   try {
+    const nextContext = buildCurrentContext(currentContext);
     const collection = db.collection('user_profile');
-    const res = await collection.where({ personaId: personaId }).get();
-
-    // 蓝图规范：状态自带 TTL 过期时间（这里默认 7 天后状态失效）
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 7);
+    const res = await collection.where({ user_id: profileId }).get();
 
     if (res.data.length > 0) {
-      // 更新现有档案的 current_context
       await collection.doc(res.data[0]._id).update({
-        't3_profile.current_context': {
-          value: currentContext,
-          expires_at: expiresAt
-        },
+        't3_profile.current_context': nextContext,
         updated_at: db.serverDate()
       });
-      return { success: true, action: "updated" };
     } else {
-      // 冷启动：初始化 T3 档案
       await collection.add({
-        personaId: personaId,
+        user_id: profileId,
+        personaId: profileId,
         t3_profile: {
-          current_context: { value: currentContext, expires_at: expiresAt }
+          current_context: nextContext
         },
+        pending_conflicts: [],
         created_at: db.serverDate(),
         updated_at: db.serverDate()
       });
-      return { success: true, action: "created" };
     }
+
+    // 迁移期兼容：当前前端主链路仍从 personas.content 读取 T3，这里同步更新一份。
+    if (personaId) {
+      const personaRes = await db.collection('personas').doc(personaId).get();
+      const persona = Array.isArray(personaRes.data) ? personaRes.data[0] : personaRes.data;
+      if (persona?.content) {
+        const t3 = JSON.parse(persona.content || '{}');
+        t3.current_context = nextContext;
+        await db.collection('personas').doc(personaId).update({ content: JSON.stringify(t3) });
+      }
+    }
+
+    return { success: true, action: res.data.length > 0 ? 'updated' : 'created' };
   } catch (error) {
-    console.error("T3 更新失败:", error);
+    console.error('T3 更新失败:', error);
     return { success: false, error: error.message };
   }
 };
