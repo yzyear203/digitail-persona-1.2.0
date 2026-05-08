@@ -190,18 +190,52 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
       }
     } catch(err) { console.warn("更新最后聊天时间失败", err); }
 
+    // 新增计时器
+const pendingResponseTimerRef = useRef(null);
+
+const handleSendMessage = async (e) => {
+  if (e) e.preventDefault();
+  const userText = input.trim();
+  if (!userText) return;
+
+  setInput('');
+  if (abortControllerRef.current) abortControllerRef.current.abort();
+  abortControllerRef.current = new AbortController();
+
+  const currentNonce = Date.now();
+  generationNonce.current = currentNonce;
+
+  resolvePendingTypingAnimations();
+
+  // 更新消息列表，但不立即触发思考
+  setMessages(prev => {
+    const filtered = prev.filter(m => !(m.role === 'assistant' && m.isAnimated));
+    return [...filtered, { id: currentNonce, role: 'user', text: userText, time: new Date().toLocaleTimeString() }];
+  });
+
+  // 3 秒防抖
+  if (pendingResponseTimerRef.current) clearTimeout(pendingResponseTimerRef.current);
+  pendingResponseTimerRef.current = setTimeout(async () => {
+    pendingResponseTimerRef.current = null;
+    if (generationNonce.current !== currentNonce) return;
+
     setIsTypingIndicator(true);
-    if (extractTimerRef.current) clearTimeout(extractTimerRef.current);
 
     try {
       const hotT1 = getHotT1(activeId);
       const sysPrompt = buildSystemPrompt(activePersona, hotT1, isCooling, daysSinceLastChat);
-      const allT0 = [...messages.filter(m => m.role !== 'system'), { role: 'user', text: userText }];
+
+      // 最近 8 条消息作为 T0
+      const recentT0 = messagesRef.current
+        .filter(m => m.role !== 'system')
+        .slice(-8)
+        .map(m => ({ role: m.role, text: m.text.replace(/<del>.*?<\/del>|<\/?recall>|\[quote:.*?\]/g, '') }));
+
       const sysPromptLength = Math.ceil(sysPrompt.length / 1.5);
-      const prunedT0 = applyBudgetAllocator(allT0, sysPromptLength, 3000);
+      const prunedT0 = applyBudgetAllocator(recentT0, sysPromptLength, 3000);
 
       const chatHistoryStr = prunedT0.map(m =>
-        `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.replace(/<del>.*?<\/del>|<\/?recall>|\[quote:.*?\]/g, '')}`
+        `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`
       ).join('\n');
 
       const responseText = await callDeepSeekAPI(
@@ -211,6 +245,49 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
         abortControllerRef.current.signal,
         activeId
       );
+
+      if (generationNonce.current !== currentNonce) return;
+      if (responseText.includes('[SILENCE]')) { setIsTypingIndicator(false); return; }
+
+      const replyParts = splitAssistantReply(responseText);
+      setIsTypingIndicator(false);
+
+      for (let i = 0; i < replyParts.length; i++) {
+        if (generationNonce.current !== currentNonce) break;
+
+        const messageId = Date.now() + i;
+        const waitForTyping = new Promise(resolve => {
+          typingResolversRef.current.set(messageId, resolve);
+        });
+
+        setMessages(prev => [
+          ...prev,
+          {
+            id: messageId,
+            role: 'assistant',
+            text: replyParts[i],
+            time: new Date().toLocaleTimeString(),
+            isAnimated: true,
+            typingPersona: activePersona?.content || ''
+          }
+        ]);
+
+        await waitForTyping;
+        typingResolversRef.current.delete(messageId);
+
+        if (i < replyParts.length - 1) {
+          await new Promise(r => setTimeout(r, 420));
+        }
+      }
+
+    } catch (error) {
+      if (error.name !== 'AbortError' && generationNonce.current === currentNonce) {
+        showMsg(`❌ 意识传输中断: ${error.message}`);
+        setIsTypingIndicator(false);
+      }
+    }
+  }, 3000); // 3 秒防抖
+};
 
       if (generationNonce.current !== currentNonce) return;
       if (responseText.includes('[SILENCE]')) { setIsTypingIndicator(false); return; }
