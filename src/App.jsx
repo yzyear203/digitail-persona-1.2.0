@@ -348,6 +348,8 @@ B: [说话内容]
           activePersona={activePersona}
           setActivePersona={setActivePersona} // 👑 补全了此前遗漏的重要状态分发！
           showMsg={showMsg}
+          user={authProps.user}
+          userProfile={authProps.userProfile}
         />
       )}
 
