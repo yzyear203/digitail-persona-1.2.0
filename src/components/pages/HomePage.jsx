@@ -2,7 +2,7 @@ import React from 'react';
 import { ShieldCheck, BookOpen, Briefcase, Wand2, ArrowRight } from 'lucide-react';
 import AgreementModal from '../ui/AgreementModal';
 
-export default function HomePage({ setAppPhase, showMsg, isAgreed, setIsAgreed, showAgreementModal, setShowAgreementModal, handleAgreeAndProceed }) {
+export default function HomePage({ showMsg, isAgreed, setIsAgreed, showAgreementModal, setShowAgreementModal, handleAgreeAndProceed }) {
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col items-center pt-20 pb-10 px-6 font-sans">
       <div className="bg-indigo-100 text-indigo-800 px-4 py-2 text-xs flex items-center justify-center space-x-2 rounded-full mb-12 shadow-sm border border-indigo-200">
