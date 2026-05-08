@@ -88,6 +88,48 @@ function getPersonaConversationState(persona) {
   return { daysSinceLastChat, isCooling };
 }
 
+async function writeMemoryThroughVectorize({ personaId, memoryRecord }) {
+  const { cloudbase } = await import('../../lib/cloudbase');
+  if (!cloudbase) throw new Error('CloudBase SDK 未初始化，无法写入记忆');
+
+  const candidateNames = ['vectorize', 'vectorize的云函数'];
+  let lastError = null;
+
+  for (const functionName of candidateNames) {
+    try {
+      const res = await cloudbase.callFunction({
+        name: functionName,
+        data: { personaId, records: [memoryRecord] },
+        timeout: 15000,
+      });
+
+      if (res.result?.success === false) {
+        throw new Error(res.result.error || `${functionName} 云函数返回失败`);
+      }
+
+      console.log(`T1 深态记忆已通过 ${functionName} 云函数写入数据库`, res.result || '');
+      return true;
+    } catch (error) {
+      lastError = error;
+      const message = String(error?.message || error || '');
+      const isFunctionMissing = /FUNCTION_NOT_FOUND|FunctionName parameter could not be found/i.test(message);
+      if (isFunctionMissing) {
+        console.warn(`${functionName} 云函数未找到，尝试下一个候选名称。`);
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw lastError || new Error('未找到可用的 vectorize 云函数');
+}
+
+async function writeMemoryDirectly({ memoryRecord }) {
+  if (!db) throw new Error('数据库未初始化，无法写入记忆');
+  await db.collection('persona_memories').add(memoryRecord);
+  console.log('T1 深态记忆已通过前端兜底直接写入数据库');
+}
+
 export default function ChatPage({ setAppPhase, messages, setMessages, activePersona, setActivePersona, showMsg }) {
   const [input, setInput] = useState('');
   const [isTypingIndicator, setIsTypingIndicator] = useState(false);
@@ -212,17 +254,20 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
             }
           }
 
-          if (db) {
+          const memoryRecord = buildT1MemoryRecord({
+            personaId: activeId,
+            t1Event,
+            deviceFp: navigator.userAgent.substring(0, 64),
+          });
+
+          try {
+            await writeMemoryThroughVectorize({ personaId: activeId, memoryRecord });
+          } catch (vectorizeError) {
+            console.warn('vectorize 云函数不可用，降级为前端直写:', vectorizeError.message);
             try {
-              const memoryRecord = buildT1MemoryRecord({
-                personaId: activeId,
-                t1Event,
-                deviceFp: navigator.userAgent.substring(0, 64),
-              });
-              await db.collection('persona_memories').add(memoryRecord);
-              console.log('T1 深态记忆已直接写入数据库');
-            } catch (err) {
-              console.error('T1 深态记忆写入数据库失败:', err);
+              await writeMemoryDirectly({ memoryRecord });
+            } catch (fallbackError) {
+              console.error('T1 深态记忆写入彻底失败:', fallbackError);
             }
           }
         }
