@@ -94,10 +94,10 @@ export const T2_TOOL_DECLARATION = `
 `;
 
 export const NATURAL_REPLY_GUARD = `
-【自然回复约束】
-- 不要把多个开场白、调侃或反问堆在同一个回复里。
-- 禁止使用“你赢了”“服服帖帖”“是不是被我猜中了”这类自我表演式套话，除非用户明确要求这种表演。
-- 若需要分多段表达，请用 ||| 分隔成独立气泡；每个气泡只承载一个情绪/信息点。
+【自然回复节奏】
+- 允许自然的开头废话、调侃、反问和情绪铺垫，只要符合当前人格与上下文即可。
+- 不要为了“干净”而强行删掉寒暄、口头禅或轻微自我表演；这些可以作为人格表达的一部分保留。
+- 若需要分多段表达，请用 ||| 分隔成独立气泡；每个气泡尽量只承载一个情绪/信息点。
 `;
 
 export function getDaysSince(dateString, now = Date.now()) {
@@ -230,39 +230,8 @@ export function applyBudgetAllocator(messages, sysPromptTokens, maxBudget = 4000
 }
 
 // ==========================================
-// 8. Assistant 回复清洗与气泡拆分
+// 8. Assistant 回复保真与气泡拆分
 // ==========================================
-const BANTER_ONLY_PATTERNS = [
-    /(嘿嘿|哈哈|好家伙)?[^。！？!?]{0,12}(你赢了|服服帖帖|组合拳|被你.*打得)[^。！？!?]{0,20}/,
-    /(是不是被我猜中了|来找灵感的是不是|说吧.*是不是)/,
-];
-
-function stripLeadingBanterClause(text) {
-    return text
-        .replace(/^(说吧[，,\s]*)?(是不是被我猜中了[，,\s]*)?(来找灵感的是不是[？?，,\s]*)?/u, '')
-        .trim();
-}
-
-function stripRedundantOpeningBanter(text) {
-    const paragraphs = String(text || '').trim().split(/\n{2,}/).map(part => part.trim()).filter(Boolean);
-    const cleanedParagraphs = [...paragraphs];
-
-    while (
-        cleanedParagraphs.length > 1
-        && cleanedParagraphs[0].length <= 60
-        && BANTER_ONLY_PATTERNS.some(pattern => pattern.test(cleanedParagraphs[0]))
-    ) {
-        cleanedParagraphs.shift();
-    }
-
-    if (cleanedParagraphs.length > 0) {
-        cleanedParagraphs[0] = stripLeadingBanterClause(cleanedParagraphs[0]);
-    }
-
-    return cleanedParagraphs.filter(Boolean).join('\n\n');
-}
-
-
 function isStructuredOrCodeReply(text) {
     return /```|^\s{0,3}#{1,6}\s|^\s{0,3}[-*+]\s|^\s{0,3}\d+\.\s|\|[^\n]+\|/m.test(text);
 }
@@ -293,7 +262,7 @@ function splitByExplicitSeparators(text) {
 }
 
 export function splitAssistantReply(responseText) {
-    const cleanedText = stripRedundantOpeningBanter(responseText);
+    const cleanedText = String(responseText || '').trim();
     if (!cleanedText) return [];
 
     if (cleanedText.includes('|||')) {
