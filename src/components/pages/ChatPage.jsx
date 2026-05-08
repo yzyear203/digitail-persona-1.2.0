@@ -30,14 +30,34 @@ const DEFAULT_CHAT_APPEARANCE = {
   backgroundImage: '',
 };
 
-function getStoredChatAppearance(activeId) {
+function getStoredChatAppearance(activeId, accountId = '') {
   try {
-    const raw = localStorage.getItem(`chat_appearance_${activeId}`);
-    return raw ? { ...DEFAULT_CHAT_APPEARANCE, ...JSON.parse(raw) } : DEFAULT_CHAT_APPEARANCE;
+    const keys = [
+      accountId ? `chat_appearance_account_${accountId}_${activeId}` : '',
+      `chat_appearance_${activeId}`,
+      accountId ? `chat_appearance_account_${accountId}` : '',
+      'chat_appearance_global',
+    ].filter(Boolean);
+
+    for (const key of keys) {
+      const raw = localStorage.getItem(key);
+      if (raw) return { ...DEFAULT_CHAT_APPEARANCE, ...JSON.parse(raw) };
+    }
+    return DEFAULT_CHAT_APPEARANCE;
   } catch (error) {
     console.warn('读取聊天外观设置失败:', error);
     return DEFAULT_CHAT_APPEARANCE;
   }
+}
+
+function persistChatAppearance(activeId, accountId, appearance) {
+  if (accountId) {
+    localStorage.setItem(`chat_appearance_account_${accountId}`, JSON.stringify(appearance));
+    localStorage.setItem(`chat_appearance_account_${accountId}_${activeId}`, JSON.stringify(appearance));
+  } else {
+    localStorage.setItem(`chat_appearance_${activeId}`, JSON.stringify(appearance));
+  }
+  localStorage.setItem('chat_appearance_global', JSON.stringify(appearance));
 }
 
 function extractDeclaredUserName(text) {
@@ -128,7 +148,7 @@ async function writeMemoryDirectly({ memoryRecord }) {
   console.log('T1 深态记忆已通过前端兜底直接写入数据库');
 }
 
-export default function ChatPage({ setAppPhase, messages, setMessages, activePersona, setActivePersona, showMsg }) {
+export default function ChatPage({ setAppPhase, messages, setMessages, activePersona, setActivePersona, showMsg, userProfile, user }) {
   const [input, setInput] = useState('');
   const [isTypingIndicator, setIsTypingIndicator] = useState(false);
   const [showTasksModal, setShowTasksModal] = useState(false);
@@ -147,8 +167,9 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   const activePersonaRef = useRef(activePersona);
 
   const activeId = activePersona?.id || 'default';
+  const accountId = user?.uid || userProfile?.uid || '';
   const chatKey = `chat_history_${activeId}`;
-  const [chatAppearance, setChatAppearance] = useState(() => getStoredChatAppearance(activeId));
+  const [chatAppearance, setChatAppearance] = useState(() => getStoredChatAppearance(activeId, accountId));
   const isDarkChat = chatAppearance.theme === 'dark';
   const chatShellClass = isDarkChat ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-900';
   const chatBackgroundStyle = chatAppearance.backgroundImage
@@ -173,17 +194,17 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   }, [activePersona]);
 
   useEffect(() => {
-    setChatAppearance(getStoredChatAppearance(activeId));
-  }, [activeId]);
+    setChatAppearance(getStoredChatAppearance(activeId, accountId));
+  }, [activeId, accountId]);
 
   useEffect(() => {
     try {
-      localStorage.setItem(`chat_appearance_${activeId}`, JSON.stringify(chatAppearance));
+      persistChatAppearance(activeId, accountId, chatAppearance);
     } catch (error) {
       console.warn('保存聊天外观设置失败:', error);
       showMsg('⚠️ 图片可能过大，浏览器本地存储已满');
     }
-  }, [activeId, chatAppearance, showMsg]);
+  }, [activeId, accountId, chatAppearance, showMsg]);
 
   useEffect(() => {
     return () => {
