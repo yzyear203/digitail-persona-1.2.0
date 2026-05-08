@@ -34,6 +34,21 @@ function compressImageFile(file, maxSize, quality = 0.76) {
   });
 }
 
+async function syncUserAvatarToCloud(accountId, userAvatar) {
+  if (!db || !accountId) return;
+  const payload = { avatarUrl: userAvatar, updatedAt: new Date(), updated_at: new Date() };
+
+  const usersRes = await db.collection('users').where({ uid: String(accountId) }).limit(1).get();
+  if (usersRes.data?.length) {
+    await db.collection('users').doc(usersRes.data[0]._id).update(payload);
+  }
+
+  const profileRes = await db.collection('user_profile').where({ user_id: String(accountId) }).limit(1).get();
+  if (profileRes.data?.length) {
+    await db.collection('user_profile').doc(profileRes.data[0]._id).update({ user_avatar: userAvatar, avatarUrl: userAvatar, updated_at: new Date() });
+  }
+}
+
 function AvatarPreview({ src, label, fallbackClass = 'bg-slate-100 text-slate-400' }) {
   return (
     <div className="flex items-center gap-3">
@@ -55,6 +70,7 @@ export default function ChatAppearanceModal({
   setChatAppearance,
   showMsg,
   onClose,
+  accountId,
 }) {
   const personaAvatarInputRef = useRef(null);
   const userAvatarInputRef = useRef(null);
@@ -92,12 +108,16 @@ export default function ChatAppearanceModal({
     event.target.value = '';
     if (!file) return;
 
+    setIsSaving(true);
     try {
       const userAvatar = await compressImageFile(file, AVATAR_SIZE, 0.78);
       updateAppearance({ userAvatar });
-      showMsg('✅ 我方头像已更新');
+      await syncUserAvatarToCloud(accountId, userAvatar);
+      showMsg(accountId ? '✅ 我方头像已云同步' : '✅ 我方头像已更新');
     } catch (error) {
-      showMsg('❌ 头像读取失败: ' + error.message);
+      showMsg('❌ 头像保存失败: ' + error.message);
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -123,6 +143,19 @@ export default function ChatAppearanceModal({
         await db.collection('personas').doc(activePersona.id).update({ avatarUrl: '' });
       }
       showMsg('✅ Persona 头像已清除');
+    } catch (error) {
+      showMsg('❌ 清除失败: ' + error.message);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const clearUserAvatar = async () => {
+    setIsSaving(true);
+    try {
+      updateAppearance({ userAvatar: '' });
+      await syncUserAvatarToCloud(accountId, '');
+      showMsg(accountId ? '✅ 我方头像已从云端清除' : '✅ 我方头像已清除');
     } catch (error) {
       showMsg('❌ 清除失败: ' + error.message);
     } finally {
@@ -179,13 +212,14 @@ export default function ChatAppearanceModal({
           <section className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-4">
             <AvatarPreview src={chatAppearance.userAvatar} label="我方头像" fallbackClass="bg-emerald-50 text-emerald-500" />
             <div className="flex flex-wrap gap-3">
-              <button onClick={() => userAvatarInputRef.current?.click()} className="px-4 py-2.5 bg-emerald-600 text-white rounded-xl font-black text-sm hover:bg-emerald-700 flex items-center gap-2">
+              <button disabled={isSaving} onClick={() => userAvatarInputRef.current?.click()} className="px-4 py-2.5 bg-emerald-600 text-white rounded-xl font-black text-sm hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2">
                 <Upload size={16} /> 上传我方头像
               </button>
-              <button disabled={!chatAppearance.userAvatar} onClick={() => updateAppearance({ userAvatar: '' })} className="px-4 py-2.5 bg-slate-100 text-slate-600 rounded-xl font-black text-sm hover:bg-slate-200 disabled:opacity-40 flex items-center gap-2">
+              <button disabled={isSaving || !chatAppearance.userAvatar} onClick={clearUserAvatar} className="px-4 py-2.5 bg-slate-100 text-slate-600 rounded-xl font-black text-sm hover:bg-slate-200 disabled:opacity-40 flex items-center gap-2">
                 <Trash2 size={16} /> 清除
               </button>
             </div>
+            <p className="text-[10px] text-slate-400 font-bold">已登录账号会同步到云端；更换手机后会自动读取。</p>
             <input ref={userAvatarInputRef} type="file" accept="image/*" className="hidden" onChange={handleUserAvatarChange} />
           </section>
 
