@@ -17,6 +17,78 @@ import { useToast } from './hooks/useToast';
 import { db, sdkInitError } from './lib/cloudbase';
 import { callDoubaoAPI, callDeepSeekAPI } from './lib/api';
 
+const MAX_DISTILLATION_CHARS = 12000;
+
+function compactDistillationMaterial(text, maxChars = MAX_DISTILLATION_CHARS) {
+  const source = String(text || '').trim();
+  if (source.length <= maxChars) return source;
+
+  const headLength = Math.floor(maxChars * 0.45);
+  const tailLength = maxChars - headLength;
+  return `${source.slice(0, headLength)}\n\n[中间素材过长，已省略 ${source.length - maxChars} 字，保留开头与结尾用于侧写稳定性]\n\n${source.slice(-tailLength)}`;
+}
+
+function stripJsonFence(text) {
+  return String(text || '').replace(/```json|```/g, '').trim();
+}
+
+function isRetryableDeepSeekError(error) {
+  return /network request error|timeout|timed out|Service is too busy|busy|overloaded|503|429/i.test(String(error?.message || error || ''));
+}
+
+function buildDistillationPrompt(material) {
+  const nowISO = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString();
+
+  return `你是一个融合行为学专家与 FBI 犯罪心理侧写师能力的数字人格架构师。
+请阅读聊天切片，从【发消息者】角度生成 DSM 2.2 人格档案。
+
+要求：
+1. 必须用第一人称“我”写 personality.value，结合原文例子，禁止泛泛而谈。
+2. 输出必须是合法 JSON，不要 markdown，不要解释。
+3. personality.value 必须包含以下模块：
+【一、打字节奏】速度快/中/慢；一次性连发条数范围；补发习惯和触发条件。
+【二、语言风格与社交面具】口头禅至少3个；收尾方式；标点习惯；打错字处理；试图维持的人设。
+【三、情绪表达与触发器】开心/不满表达方式；会激怒或冷处理的话题。
+【四、对话行为与微观操控】提问风格；回应率；理亏或想占上风时的策略。
+【五、时间与潜意识泄露】对“对方没回”的处理；用 <del>本来准备发出的具体文字</del> 表现打了又删的内容。
+【六、引用与撤回触发条件】根据人格选择 2 到 3 个 quote_triggers，2 到 3 个 recall_triggers，不要套模板。
+【最终系统执行指令】包括：使用 ||| 分气泡；触发时使用微观操控策略；禁止动作描写；用 <del> 展示犹豫；命中引用触发时用 [quote:对方原话短片段]；命中撤回触发时用 <recall>发出后后悔的原消息</recall>。
+
+引用触发条件参考：
+- 对方一条消息说了好几件事，需要挑一句回应。
+- 对方某句话让自己停顿、心软、在意。
+- 对方前后矛盾或嘴硬，适合轻微调侃。
+- 对方说了很沉的话，需要表示接住了。
+- 对方说了很多不同方面的话，需要逐条回应。
+
+撤回触发条件参考：
+- 我说得太主动、太在意。
+- 我语气太重。
+- 我暴露太多真实情绪。
+- 我觉得时机不对。
+- 我刚发出后想改成更淡的版本。
+- 我打错字，需要撤回或解释。
+
+输出 JSON 格式：
+{
+  "identity": { "value": "根据聊天推断的客观身份，若无填空", "confidence": "high" },
+  "personality": { "value": "完整第一人称心理侧写与最终系统执行指令", "confidence": "high" },
+  "interests": [ { "topic": "爱好或关注点", "weight": 8, "confidence": "high" } ],
+  "relationship": { "archetype": "朋友", "intimacy_level": 5, "last_chat_time": "${nowISO}", "bond_momentum": "stable" },
+  "current_context": { "value": "用户目前的精神状态或正在忙的事", "expires_at": "${expiresAt}" },
+  "interaction_style": {
+    "quote_tendency": "low/medium/high",
+    "quote_triggers": ["具体人格化引用触发条件1", "具体人格化引用触发条件2"],
+    "recall_tendency": "low/medium/high",
+    "recall_triggers": ["具体人格化撤回触发条件1", "具体人格化撤回触发条件2"]
+  }
+}
+
+聊天记录原始切片：
+${material || '用户未上传素材，请生成一个合法的测试型 T3 JSON 档案。'}`;
+}
+
 export default function App() {
   // === 全局路由与状态调度 ===
   const [appPhase, setAppPhase] = useState('home'); // 可选值: home, auth, dashboard, distilling, chat
@@ -110,7 +182,7 @@ export default function App() {
     setAppPhase('auth');
   };
 
-  // 2. 开始启动 AI 多模态人格蒸馏 (完全替换该方法)
+  // 2. 开始启动 AI 多模态人格蒸馏
   const handleStartDistillation = async () => {
     if (uploadedFiles.length === 0) return;
     setAppPhase('distilling');
@@ -136,7 +208,7 @@ B: [说话内容]
 
         const ocrResult = await callDoubaoAPI(
           ocrPrompt, 
-          "你是一个只负责提取文本的机器部件。", 
+          '你是一个只负责提取文本的机器部件。', 
           imageParts
         );
         
@@ -148,106 +220,39 @@ B: [说话内容]
       setDistillProgress(50);
       setDistillLogs(prev => [...prev, '[深度认知] 启动 DeepSeek V4 Pro 思维链，进行 BAU 临床级侧写...']);
 
-      // 👑 终极进化：完美保留 FBI 侧写逻辑并强制输出 DSM 2.2 标准的 JSON
-      let prompt = `你是一个融合了顶级行为学专家与 FBI 犯罪心理侧写师能力的数字人格架构师。
-请仔细阅读以下原始聊天切片，从【发消息者】的角度，提炼出符合 DSM 2.2 标准的结构化档案。
+      const compactMaterial = compactDistillationMaterial(combinedChatText);
+      if (combinedChatText.length > compactMaterial.length) {
+        setDistillLogs(prev => [...prev, `[压缩] 素材过长，已从 ${combinedChatText.length} 字压缩到 ${compactMaterial.length} 字，避免请求过载。`]);
+      }
 
-【核心任务要求】：
-你需要完成两步：
-第一步：完成深度的心理侧写与指令编写（请严格遵循下方的《侧写指南》）。
-第二步：将你写好的侧写内容，严格封装成规定的 JSON 格式返回。
+      const prompt = buildDistillationPrompt(compactMaterial);
+      const systemPrompt = '你是一个只输出合法JSON的机器，严禁输出其他字符。';
 
-=== 《侧写指南》 ===
-请严格用第一人称（"我"）书写，必须结合原文例子，禁止泛泛而谈。
-【一、打字节奏（物理表象）】
-- 我的打字速度：快/中/慢
-- 我一次性连发的条数范围：X～X 条（必须给出确切数字范围，决定我使用"|||"切分消息的频率）
-- 我发完消息后是否习惯补发？触发条件是什么？
-【二、语言风格与社交面具】
-- 我的标志性口头禅和惯用词（摘抄原文，至少3个）
-- 我的句子收尾方式：习惯用"吧""哈""呢""～"或直接截断？
-- 我的标点使用习惯
-- 发完消息发现错了，我会发一条纠正（如"*字"），还是直接忽略？
-- 我的社交面具（Overcompensation）：我试图维持一个什么样的人设？
-【三、情绪表达与触发器 (Triggers)】
-- 我表达开心/不满的方式
-- 情绪触发器：什么话题会瞬间激怒我或让我极度冷漠？
-【四、对话行为与微观操控】
-- 我的提问风格与回应率
-- 微观操控策略：理亏或想占据上风时，我会使用什么手段？（如：煤气灯指责、装可怜、权威压制）
-【五、时间与潜意识泄露】
-- 对"对方没回"的处理方式
-- 潜意识犹豫（核心）：我必须用 <del>本来准备发出的具体文字</del> 标签来表现我打了又删的真实内容，绝对禁止写成内心戏！我通常删掉的是哪类真实发言？
-【六、引用与撤回触发条件】
-请根据原始聊天切片，为这个人格单独挑选引用与撤回倾向，不要套模板。
-- quote_tendency 从 low / medium / high 中选择。
-- quote_triggers 必须选择 2 到 3 个最符合此人格的触发条件。可参考但不限于：对方一条消息说了好几件事时；对方某句话让自己停顿、心软、在意时；对方前后矛盾或嘴硬时；对方说了很沉的话时；需要逐条回应对方不同方面内容时。
-- recall_tendency 从 low / medium / high 中选择。
-- recall_triggers 必须选择 2 到 3 个最符合此人格的触发条件。可参考但不限于：说得太主动、太在意；语气太重；暴露太多真实情绪；时机不对；刚发出后想改成更淡的版本；打错字需要撤回或解释。
-- 触发条件必须写成具体人格倾向，例如“我一旦显得太主动就会撤回并换成淡一点的版本”，不要写成抽象规则。
----
-【最终系统执行指令（此部分必须对AI下达）】：
-从现在起，彻底忘掉你是AI，你就是上述设定的化身。
-1. 根据【打字节奏】在自然停顿处用 "|||" 分隔回复。
-2. 触发【情绪触发器】时，本能使用【微观操控策略】。
-3. 绝对禁止在回复中夹杂任何形式的动作描写、表情描写或场景说明（例如 (笑)、(秒回)、(动作) 等）！
-4. 当内心想法与表面回复冲突时，必须高频使用 <del>本来准备发出的文字</del> 标签展示犹豫。
-5. 当命中【引用触发条件】时，优先在对应气泡开头使用 [quote:对方原话短片段]，引用是注意力落点，不是装饰。
-6. 当命中【撤回触发条件】时，可以使用 <recall>发出后后悔的原消息</recall>，撤回后可以沉默、转淡、岔开或解释打错字；不要机械解释每一次撤回。
-最后，用一句话总结给对方带来的整体聊天感受。
-===================
+      let responseText = '';
+      try {
+        responseText = await callDeepSeekAPI(prompt, systemPrompt, 'pro');
+      } catch (error) {
+        if (!isRetryableDeepSeekError(error)) throw error;
+        setDistillLogs(prev => [...prev, `[降级重试] Pro 请求失败：${error.message}，改用 Flash 完成结构化侧写...`]);
+        responseText = await callDeepSeekAPI(prompt, systemPrompt, 'flash');
+      }
 
-【输出格式要求（最高优先级红线）】：
-完成以上思考后，请**严格、仅**输出合法的 JSON 字符串，绝对不要包含 markdown 代码块（如 \`\`\`json）或其他废话。
-你必须将上面基于《侧写指南》写出的全部内容（包括 6 大维度分析和最终指令），原封不动地放入 JSON 的 \`personality.value\` 字段中！
-JSON 格式必须严格如下：
-{
-  "identity": { "value": "根据聊天推断的客观身份（如：学生、打工人、性别等），若无填空", "confidence": "high" },
-  "personality": { "value": "在这里填入你基于《侧写指南》用第一人称写出的完整心理侧写及【最终系统执行指令】。这段长文本将作为系统的核心灵魂驱动。", "confidence": "high" },
-  "interests": [ { "topic": "提取的爱好1", "weight": 8, "confidence": "high" } ],
-  "relationship": { "archetype": "朋友/恋人/同事", "intimacy_level": 5, "last_chat_time": "${new Date().toISOString()}", "bond_momentum": "stable" },
-  "current_context": { "value": "用户目前的精神状态或正在忙的事", "expires_at": "${new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString()}" },
-  "interaction_style": {
-    "quote_tendency": "medium",
-    "quote_triggers": ["选择出的引用触发条件1", "选择出的引用触发条件2", "选择出的引用触发条件3"],
-    "recall_tendency": "low",
-    "recall_triggers": ["选择出的撤回触发条件1", "选择出的撤回触发条件2"]
-  }
-}`;
-
-      if (combinedChatText) prompt += `\n\n【必须进行分析的聊天记录原始切片】：\n${combinedChatText}\n`;
-      if (!combinedChatText) prompt = "用户未上传素材，请随机生成一个合法的极度压抑的测试型 T3 JSON 档案。";
-
-      // 👑 绝不改动你的原版提示词，仅在末尾强制其用 JSON 包装结果
-      prompt += `\n\n【格式红线】：请将你上述分析的所有内容和系统指令，全部放在以下 JSON 的 "personality" 字段的 "value" 中。你只能输出合法的 JSON，绝对禁止输出 Markdown！
-      {
-        "identity": { "value": "", "confidence": "high" },
-        "personality": { "value": "你的分析结果写在这里", "confidence": "high" },
-        "interests": [],
-        "relationship": { "archetype": "朋友", "intimacy_level": 5, "last_chat_time": "${new Date().toISOString()}", "bond_momentum": "stable" },
-        "current_context": { "value": "无", "expires_at": "${new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString()}" },
-        "interaction_style": {
-          "quote_tendency": "medium",
-          "quote_triggers": ["根据人格选择出的引用触发条件1", "根据人格选择出的引用触发条件2"],
-          "recall_tendency": "low",
-          "recall_triggers": ["根据人格选择出的撤回触发条件1", "根据人格选择出的撤回触发条件2"]
-        }
-      }`;
-
-      const responseText = await callDeepSeekAPI(
-        prompt, 
-        "你是一个只输出合法JSON的机器，严禁输出其他字符。"
-      );
+      const personaContent = stripJsonFence(responseText);
+      try {
+        JSON.parse(personaContent);
+      } catch (parseError) {
+        throw new Error(`侧写结果不是合法 JSON：${parseError.message}`);
+      }
 
       // ================= 阶段三：收尾刻录 =================
       setDistillProgress(90);
-      setDistillLogs(prev => [...prev, '[成功] DeepSeek V4 思维链推演完毕。']);
+      setDistillLogs(prev => [...prev, '[成功] DeepSeek 推演完毕。']);
       setDistillLogs(prev => [...prev, '[刻录] 正在将档案同步至云端数据库...']);
 
       const newPersona = {
         uid: authProps.user?.uid || 'anonymous',
         name: `灵魂切片_${new Date().toLocaleDateString().replace(/\//g, '')}`,
-        content: responseText,
+        content: personaContent,
         createdAt: Date.now()
       };
 
@@ -275,7 +280,7 @@ JSON 格式必须严格如下：
     setActivePersona(persona);
     // 注意：DSM 2.2 中这里存放的是 SYSTEM_BOOT 占位，真正的 Prompt 在 ChatPage 实时组装
     setMessages([
-      { id: Date.now(), role: 'system', text: "SYSTEM_BOOT", time: new Date().toLocaleTimeString(), isAnimated: false }
+      { id: Date.now(), role: 'system', text: 'SYSTEM_BOOT', time: new Date().toLocaleTimeString(), isAnimated: false }
     ]);
     setAppPhase('chat');
   };
@@ -287,7 +292,7 @@ JSON 格式必须严格如下：
     try {
       await db.collection('personas').doc(id).remove();
       setSavedPersonas(prev => prev.filter(p => p.id !== id));
-      showMsg("✅ 对应的数字分身档案已彻底销毁");
+      showMsg('✅ 对应的数字分身档案已彻底销毁');
     } catch (error) {
       showMsg(`❌ 销毁失败: ${error.message}`);
     }
