@@ -93,6 +93,13 @@ export const T2_TOOL_DECLARATION = `
 {"tool_name":"retrieve_long_term_memory","description":"检索用户的长期语义记忆","trigger_when":"用户询问历史事件、话题涉及专业/旅行/重大决策时","input":{"query":"string"}}
 `;
 
+export const NATURAL_REPLY_GUARD = `
+【自然回复约束】
+- 不要把多个开场白、调侃或反问堆在同一个回复里。
+- 禁止使用“你赢了”“服服帖帖”“是不是被我猜中了”这类自我表演式套话，除非用户明确要求这种表演。
+- 若需要分多段表达，请用 ||| 分隔成独立气泡；每个气泡只承载一个情绪/信息点。
+`;
+
 export function getDaysSince(dateString, now = Date.now()) {
     if (!dateString) return 0;
     const parsedTime = new Date(dateString).getTime();
@@ -184,6 +191,8 @@ export function buildSystemPrompt(activePersona, hotT1, isCooling, daysSinceLast
 
     prompt += T2_TOOL_DECLARATION + "\n\n";
 
+    prompt += NATURAL_REPLY_GUARD + "\n\n";
+
     if (hotT1 && hotT1.length > 0) {
         prompt += "[近期事件]\n" + hotT1.map(item => `- [${new Date(item.timestamp).toISOString().split('T')[0]}] ${item.summary}`).join('\n') + "\n\n";
     } else if (!t3.identity?.value) {
@@ -221,7 +230,62 @@ export function applyBudgetAllocator(messages, sysPromptTokens, maxBudget = 4000
 }
 
 // ==========================================
-// 8. DSM 2.2 标准记忆记录构造/兼容层
+// 8. Assistant 回复清洗与气泡拆分
+// ==========================================
+const BANTER_ONLY_PATTERNS = [
+    /(嘿嘿|哈哈|好家伙)?[^。！？!?]{0,12}(你赢了|服服帖帖|组合拳|被你.*打得)[^。！？!?]{0,20}/,
+    /(是不是被我猜中了|来找灵感的是不是|说吧.*是不是)/,
+];
+
+function stripLeadingBanterClause(text) {
+    return text
+        .replace(/^(说吧[，,\s]*)?(是不是被我猜中了[，,\s]*)?(来找灵感的是不是[？?，,\s]*)?/u, '')
+        .trim();
+}
+
+function stripRedundantOpeningBanter(text) {
+    const paragraphs = String(text || '').trim().split(/\n{2,}/).map(part => part.trim()).filter(Boolean);
+    const cleanedParagraphs = [...paragraphs];
+
+    while (
+        cleanedParagraphs.length > 1
+        && cleanedParagraphs[0].length <= 60
+        && BANTER_ONLY_PATTERNS.some(pattern => pattern.test(cleanedParagraphs[0]))
+    ) {
+        cleanedParagraphs.shift();
+    }
+
+    if (cleanedParagraphs.length > 0) {
+        cleanedParagraphs[0] = stripLeadingBanterClause(cleanedParagraphs[0]);
+    }
+
+    return cleanedParagraphs.filter(Boolean).join('\n\n');
+}
+
+
+function isStructuredOrCodeReply(text) {
+    return /```|^\s{0,3}#{1,6}\s|^\s{0,3}[-*+]\s|^\s{0,3}\d+\.\s|\|[^\n]+\|/m.test(text);
+}
+
+export function splitAssistantReply(responseText) {
+    const cleanedText = stripRedundantOpeningBanter(responseText);
+    if (!cleanedText) return [];
+
+    if (cleanedText.includes('|||')) {
+        return cleanedText.split(/\|\|\|/).map(part => part.trim()).filter(Boolean);
+    }
+
+    if (isStructuredOrCodeReply(cleanedText)) return [cleanedText];
+
+    const paragraphParts = cleanedText.split(/\n{2,}/).map(part => part.trim()).filter(Boolean);
+    if (paragraphParts.length <= 1) return [cleanedText];
+
+    const shouldSplitByParagraph = paragraphParts.every(part => part.length <= 220) && paragraphParts.length <= 4;
+    return shouldSplitByParagraph ? paragraphParts : [cleanedText];
+}
+
+// ==========================================
+// 9. DSM 2.2 标准记忆记录构造/兼容层
 // ==========================================
 export function buildT1MemoryRecord({ personaId, t1Event, sessionId = 'sess_active', deviceFp = '' }) {
     const currentTimestamp = Date.now();
@@ -274,7 +338,7 @@ export function estimateKeywordScore(content, query) {
 }
 
 // ==========================================
-// 9. 记忆提取引擎接口 (预留位)
+// 10. 记忆提取引擎接口 (预留位)
 // ==========================================
 export async function extractT1FromMessages(messages) {
     const latestUserText = messages?.filter(m => m.role === 'user').slice(-1)[0]?.text || '';

@@ -5,7 +5,7 @@ import ChatInput from '../chat/ChatInput';
 import TasksModal from '../ui/TasksModal';
 import MemoryCabin from '../ui/MemoryCabin';
 import { callDoubaoAPI, callDeepSeekAPI } from '../../lib/api';
-import { hasContentSignal, getHotT1, saveToHotT1Cache, buildSystemPrompt, applyBudgetAllocator, buildT1MemoryRecord, getDaysSince } from '../../lib/dsm';
+import { hasContentSignal, getHotT1, saveToHotT1Cache, buildSystemPrompt, applyBudgetAllocator, buildT1MemoryRecord, getDaysSince, splitAssistantReply } from '../../lib/dsm';
 
 export default function ChatPage({ setAppPhase, messages, setMessages, activePersona, setActivePersona, showMsg }) {
   const [input, setInput] = useState('');
@@ -212,8 +212,8 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
       if (generationNonce.current !== currentNonce) return;
       if (responseText.includes('[SILENCE]')) { setIsTypingIndicator(false); return; }
 
-      // 👑 首席修复：彻底移除 - 和 = 切割，防止长文、代码块、Markdown 表格被行刑式打碎。强制只用 ||| 作为唯一分隔符。
-      const replyParts = responseText.split(/\|\|\|/).map(s => s.trim()).filter(s => s);
+      // 回复清洗：优先尊重 ||| 显式分隔；普通短段落按空行拆成独立气泡，代码/Markdown 保持完整。
+      const replyParts = splitAssistantReply(responseText);
       setIsTypingIndicator(false);
 
       for (let i = 0; i < replyParts.length; i++) {
