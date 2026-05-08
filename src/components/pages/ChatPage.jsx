@@ -20,7 +20,7 @@ import {
 
 const IMMEDIATE_MEMORY_WINDOW = 8;
 const USER_SETTLE_DELAY_MS = 3000;
-const DEBUG_FORCE_QUOTE_RECALL = true;
+const DEBUG_FORCE_QUOTE_RECALL = false;
 const DEBUG_RECALL_FALLBACK_TEXT = '撤回测试：如果组件正常，这条会先打出来，然后变成撤回提示。';
 const CONTROL_MARKER_REGEX = /<del>[\s\S]*?<\/del>|<\/?recall>|\[quote:[\s\S]*?\]/g;
 
