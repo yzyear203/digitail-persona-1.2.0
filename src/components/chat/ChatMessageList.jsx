@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { CheckSquare, Quote, RotateCcw, Square, UserCircle, X } from 'lucide-react';
 import TypingText from '../ui/TypingText';
 
@@ -24,7 +24,7 @@ function MessageActionButton({ children, onClick, danger = false, disabled = fal
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 transition-colors disabled:cursor-not-allowed ${colorClass}`}
+      className={`w-full px-3 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-colors disabled:cursor-not-allowed ${colorClass}`}
     >
       {children}
     </button>
@@ -47,6 +47,7 @@ export default function ChatMessageList({
   onCancelUserMessageSelection,
   onRecallSelectedUserMessages,
 }) {
+  const [contextMenu, setContextMenu] = useState(null);
   const isDark = chatAppearance?.theme === 'dark';
   const assistantAvatar = activePersona?.avatarUrl || '';
   const userAvatar = chatAppearance?.userAvatar || '';
@@ -63,8 +64,57 @@ export default function ChatMessageList({
     ? 'bg-slate-900/95 border-slate-700 text-slate-100 shadow-black/30'
     : 'bg-white/95 border-slate-200 text-slate-800 shadow-slate-200/80';
 
+  useEffect(() => {
+    if (!contextMenu) return undefined;
+
+    const closeMenu = () => setContextMenu(null);
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') closeMenu();
+    };
+
+    window.addEventListener('click', closeMenu);
+    window.addEventListener('scroll', closeMenu, true);
+    window.addEventListener('keydown', closeOnEscape);
+
+    return () => {
+      window.removeEventListener('click', closeMenu);
+      window.removeEventListener('scroll', closeMenu, true);
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [contextMenu]);
+
+  const openContextMenu = (event, message) => {
+    const rawText = String(message?.text || '');
+    const actualText = rawText.replace(/<\/?recall>|\[quote:.*?\]/g, '').trim();
+    const strippedText = actualText.replace(/<del>[\s\S]*?<\/del>/g, '').trim();
+    const isActionable = Boolean(strippedText) && !message?.isRecalled;
+
+    if (!isActionable) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const menuWidth = 176;
+    const menuHeight = message.role === 'user' ? 150 : 58;
+    const safeX = Math.min(event.clientX, window.innerWidth - menuWidth - 12);
+    const safeY = Math.min(event.clientY, window.innerHeight - menuHeight - 12);
+
+    setContextMenu({
+      message,
+      x: Math.max(12, safeX),
+      y: Math.max(12, safeY),
+    });
+  };
+
+  const runContextAction = (action) => {
+    const message = contextMenu?.message;
+    setContextMenu(null);
+    if (!message) return;
+    action(message);
+  };
+
   return (
-    <main className={`flex-1 overflow-y-auto p-4 md:p-8 ${mainClass}`}>
+    <main className={`flex-1 overflow-y-auto p-4 md:p-8 ${mainClass}`} onContextMenu={() => setContextMenu(null)}>
       {messages.map((m, index) => {
         if (m.role === 'system') return null;
 
@@ -112,7 +162,7 @@ export default function ChatMessageList({
                 </span>
               </div>
             ) : (
-              <div className={`group flex items-start gap-3 mb-6 ${isUser ? 'justify-end' : 'justify-start'}`}>
+              <div className={`flex items-start gap-3 mb-6 ${isUser ? 'justify-end' : 'justify-start'}`}>
                 {!isUser && (
                   <Avatar src={assistantAvatar} label={activePersona?.name || 'Persona'} isUser={false} isDark={isDark} />
                 )}
@@ -130,32 +180,12 @@ export default function ChatMessageList({
                 )}
 
                 <div
-                  className={`relative max-w-[72%] ${isSelectingUserMessages && isSelectableUserMessage ? 'cursor-pointer' : ''}`}
+                  className={`relative max-w-[72%] ${isSelectingUserMessages && isSelectableUserMessage ? 'cursor-pointer' : 'cursor-default'}`}
                   onClick={() => {
                     if (isSelectingUserMessages && isSelectableUserMessage) onToggleUserMessageSelection?.(m.id);
                   }}
+                  onContextMenu={event => openContextMenu(event, m)}
                 >
-                  {isActionable && !isSelectingUserMessages && (
-                    <div
-                      className={`absolute ${isUser ? 'right-0' : 'left-0'} -top-9 z-20 hidden group-hover:flex items-center gap-1 rounded-xl border px-1.5 py-1 shadow-lg backdrop-blur ${actionBarClass}`}
-                      onClick={event => event.stopPropagation()}
-                    >
-                      <MessageActionButton onClick={() => onQuoteMessage?.(m)}>
-                        <Quote size={13} /> 引用
-                      </MessageActionButton>
-                      {isUser && (
-                        <>
-                          <MessageActionButton danger onClick={() => onRecallUserMessage?.(m.id)}>
-                            <RotateCcw size={13} /> 撤回
-                          </MessageActionButton>
-                          <MessageActionButton onClick={() => onStartUserMessageSelection?.(m.id)}>
-                            <CheckSquare size={13} /> 多选
-                          </MessageActionButton>
-                        </>
-                      )}
-                    </div>
-                  )}
-
                   <div className={`px-5 py-3.5 rounded-2xl shadow-sm text-[15px] font-medium leading-relaxed transition-all ${bubbleClass} ${isSelected ? 'ring-2 ring-emerald-400 ring-offset-2 ring-offset-transparent' : ''}`}>
                     {quoteText && (
                       <div className={`mb-2 p-2 rounded-lg border-l-4 text-xs flex items-start gap-2 italic ${quoteClass}`}>
@@ -194,6 +224,29 @@ export default function ChatMessageList({
           </React.Fragment>
         );
       })}
+
+      {contextMenu && (
+        <div
+          className={`fixed z-50 w-44 rounded-xl border p-1.5 shadow-2xl backdrop-blur ${actionBarClass}`}
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onClick={event => event.stopPropagation()}
+          onContextMenu={event => event.preventDefault()}
+        >
+          <MessageActionButton onClick={() => runContextAction(message => onQuoteMessage?.(message))}>
+            <Quote size={15} /> 引用
+          </MessageActionButton>
+          {contextMenu.message.role === 'user' && (
+            <>
+              <MessageActionButton danger onClick={() => runContextAction(message => onRecallUserMessage?.(message.id))}>
+                <RotateCcw size={15} /> 撤回
+              </MessageActionButton>
+              <MessageActionButton onClick={() => runContextAction(message => onStartUserMessageSelection?.(message.id))}>
+                <CheckSquare size={15} /> 多选
+              </MessageActionButton>
+            </>
+          )}
+        </div>
+      )}
 
       {isSelectingUserMessages && (
         <div className="sticky bottom-4 z-30 flex justify-center pointer-events-none">
