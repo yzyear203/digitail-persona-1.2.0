@@ -1,10 +1,12 @@
-import React, { useRef } from 'react';
-import { LogOut, Database, UploadCloud, CheckSquare } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import { BarChart3, LogOut, Database, UploadCloud, CheckSquare } from 'lucide-react';
 import PersonaCard from '../ui/PersonaCard';
+import CostCockpitModal from '../ui/CostCockpitModal';
 import { ensurePublicPersona } from '../../lib/publicPersona';
 
 export default function DashboardPage({ userProfile, user, savedPersonas, uploadedFiles, setUploadedFiles, handleStartDistillation, handleDeleteSavedPersona, loadPersonaAndChat, handleLogout }) {
   const fileInputRef = useRef(null);
+  const [showCostCockpit, setShowCostCockpit] = useState(false);
 
   const handleFileUpload = async (e) => {
     const files = Array.from(e.target.files);
@@ -56,6 +58,12 @@ export default function DashboardPage({ userProfile, user, savedPersonas, upload
     <div className="min-h-screen bg-slate-50 flex flex-col items-center p-6 font-sans">
       <div className="w-full max-w-5xl flex justify-end mb-6">
         <div className="bg-white border border-slate-200 shadow-sm rounded-2xl px-5 py-2.5 flex items-center gap-5">
+          <button
+            onClick={() => setShowCostCockpit(true)}
+            className="text-sm font-bold text-slate-500 hover:text-emerald-600 transition-colors flex items-center gap-1.5 border-r border-slate-100 pr-5"
+          >
+            <BarChart3 size={16}/> 成本驾驶舱
+          </button>
           <div className="flex items-center gap-3 border-r border-slate-100 pr-5">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-black text-lg">{userProfile?.nickname?.charAt(0) || 'U'}</div>
             <div className="flex flex-col">
@@ -114,6 +122,8 @@ export default function DashboardPage({ userProfile, user, savedPersonas, upload
           </div>
         </div>
       </div>
+
+      {showCostCockpit && <CostCockpitModal onClose={() => setShowCostCockpit(false)} />}
     </div>
   );
 }
