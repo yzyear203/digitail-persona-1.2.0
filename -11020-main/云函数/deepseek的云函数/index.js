@@ -5,6 +5,11 @@ const db = app.database();
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 const EMBEDDING_API_KEY = process.env.EMBEDDING_API_KEY;
 
+const DEEPSEEK_PRICE_CNY_PER_1M = {
+  'deepseek-v4-flash': { cacheHitInput: 0.02, cacheMissInput: 1, output: 2 },
+  'deepseek-v4-pro': { cacheHitInput: 0.025, cacheMissInput: 3, output: 6 },
+};
+
 function normalizeMemory(memory) {
   const content = memory.content || memory.text || '';
   return {
@@ -89,6 +94,47 @@ function mergeUsage(...usages) {
       prompt_cache_hit_tokens: 0,
       prompt_cache_miss_tokens: 0,
     });
+}
+
+function estimateDeepSeekCostCNY(model, usage) {
+  const price = DEEPSEEK_PRICE_CNY_PER_1M[model] || DEEPSEEK_PRICE_CNY_PER_1M['deepseek-v4-flash'];
+  const cacheHitInput = usage.prompt_cache_hit_tokens || 0;
+  const cacheMissInput = usage.prompt_cache_miss_tokens ?? Math.max(0, (usage.prompt_tokens || 0) - cacheHitInput);
+  const outputTokens = usage.completion_tokens || 0;
+  return Number((
+    cacheHitInput / 1000000 * price.cacheHitInput +
+    cacheMissInput / 1000000 * price.cacheMissInput +
+    outputTokens / 1000000 * price.output
+  ).toFixed(8));
+}
+
+async function writeUsageLog(meta = {}) {
+  try {
+    const usage = normalizeUsage(meta);
+    const model = meta.model || meta.requested_model || 'deepseek-v4-flash';
+    await db.collection('model_usage_logs').add({
+      provider: 'deepseek',
+      scene: meta.scene || 'unknown',
+      request_id: meta.request_id || `deepseek_${Date.now()}`,
+      personaId: meta.personaId || 'default',
+      model,
+      actual_model: meta.actual_model || model,
+      requested_model: meta.requested_model || model,
+      model_call_count: meta.model_call_count || 1,
+      memory_tool_used: Boolean(meta.memory_tool_used),
+      prompt_tokens: usage.prompt_tokens,
+      completion_tokens: usage.completion_tokens,
+      total_tokens: usage.total_tokens,
+      prompt_cache_hit_tokens: usage.prompt_cache_hit_tokens,
+      prompt_cache_miss_tokens: usage.prompt_cache_miss_tokens,
+      estimated_cost_cny: estimateDeepSeekCostCNY(model, usage),
+      raw_usage: meta,
+      createdAt: Date.now(),
+      createTime: db.serverDate(),
+    });
+  } catch (error) {
+    console.warn('模型用量日志写入失败，不影响主流程:', error.message);
+  }
 }
 
 function attachUsageMeta(data, meta = {}) {
@@ -208,7 +254,7 @@ exports.main = async (event = {}, _context = {}) => {
       if (finalData.error) return finalData;
 
       const mergedUsage = mergeUsage(initialData.usage, finalData.usage);
-      return {
+      const result = {
         ...finalData,
         usage: mergedUsage,
         x_usage: {
@@ -230,9 +276,11 @@ exports.main = async (event = {}, _context = {}) => {
           ],
         }
       };
+      await writeUsageLog(result.x_usage);
+      return result;
     }
 
-    return attachUsageMeta(initialData, {
+    const result = attachUsageMeta(initialData, {
       request_id: requestId,
       scene: usageScene,
       personaId,
@@ -242,6 +290,8 @@ exports.main = async (event = {}, _context = {}) => {
       model_call_count: 1,
       memory_tool_used: false,
     });
+    await writeUsageLog(result.x_usage);
+    return result;
   } catch (error) {
     return { error: { message: error.message } };
   }
