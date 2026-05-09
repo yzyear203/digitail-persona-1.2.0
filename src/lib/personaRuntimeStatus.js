@@ -235,17 +235,8 @@ export function getRuntimeStatusFromT3(t3Content) {
     return normalizeRuntimeStatus(runtimeStatus);
   }
 
-  if (t3.current_context?.value && !isRawStatusExpired(t3.current_context)) {
-    return normalizeRuntimeStatus({
-      label: '进行中',
-      activity: t3.current_context.value,
-      color: 'purple',
-      expires_at: t3.current_context.expires_at,
-      duration_minutes: 60,
-      source: 'current_context',
-    });
-  }
-
+  // current_context 是“闪电状态/上下文 TTL”，不是生活状态闹钟。
+  // 它可能有 7 天有效期，不能拿来计算 30~180 分钟的 Persona 闹钟倒计时。
   return null;
 }
 
