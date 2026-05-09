@@ -1,6 +1,6 @@
 import { db } from './cloudbase';
 
-export async function upsertPersonaProfile({ personaId, t3Profile, nickname }) {
+export async function upsertPersonaProfile({ personaId, t3Profile }) {
   if (!db || !personaId) return;
 
   const payload = {
@@ -10,7 +10,6 @@ export async function upsertPersonaProfile({ personaId, t3Profile, nickname }) {
   };
 
   if (t3Profile) payload.t3_profile = t3Profile;
-  if (nickname) payload.nickname = nickname;
 
   const res = await db.collection('user_profile').where({ user_id: personaId }).limit(1).get();
   if (res.data?.length) {
