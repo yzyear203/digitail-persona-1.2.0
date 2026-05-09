@@ -33,7 +33,9 @@ const COLOR_ALIASES = {
   '灰色': 'slate',
 };
 
-const DEFAULT_STATUS_TTL_MS = 2 * 60 * 60 * 1000;
+const DEFAULT_STATUS_TTL_MINUTES = 45;
+const MIN_STATUS_TTL_MINUTES = 5;
+const MAX_STATUS_TTL_MINUTES = 8 * 60;
 const STATUS_MARKER_REGEX = /\[status:\s*(\{[\s\S]*?\})\]/gi;
 
 function compactText(value, maxChars) {
@@ -59,6 +61,60 @@ function parseMaybeJSON(value) {
   }
 }
 
+function clampDuration(minutes) {
+  const numeric = Number(minutes);
+  if (!Number.isFinite(numeric)) return DEFAULT_STATUS_TTL_MINUTES;
+  return Math.min(MAX_STATUS_TTL_MINUTES, Math.max(MIN_STATUS_TTL_MINUTES, Math.round(numeric)));
+}
+
+function parseChineseNumber(text) {
+  const source = String(text || '').trim();
+  const digitMatch = source.match(/\d+/);
+  if (digitMatch) return Number(digitMatch[0]);
+
+  const digitMap = { 零: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+  if (source.includes('半')) return 30;
+  if (source === '十') return 10;
+  const tenIndex = source.indexOf('十');
+  if (tenIndex >= 0) {
+    const tens = tenIndex === 0 ? 1 : digitMap[source[tenIndex - 1]] || 1;
+    const ones = digitMap[source[tenIndex + 1]] || 0;
+    return tens * 10 + ones;
+  }
+  return digitMap[source[0]] || null;
+}
+
+function parseDurationMinutes(value) {
+  if (Number.isFinite(Number(value))) return clampDuration(Number(value));
+  const source = String(value || '').trim();
+  if (!source) return DEFAULT_STATUS_TTL_MINUTES;
+  const number = parseChineseNumber(source) || DEFAULT_STATUS_TTL_MINUTES;
+  if (/小时|钟头|hour/i.test(source)) return clampDuration(number * 60);
+  return clampDuration(number);
+}
+
+function resolveDurationMinutes(source, fallback) {
+  return parseDurationMinutes(
+    source.duration_minutes
+    || source.durationMinutes
+    || source.estimated_minutes
+    || source.estimatedMinutes
+    || source.duration
+    || source.ttl_minutes
+    || fallback.duration_minutes
+    || fallback.durationMinutes
+  );
+}
+
+function buildExpiresAt(source, durationMinutes, now) {
+  const rawExpiresAt = source.expires_at || source.expiresAt;
+  if (rawExpiresAt) {
+    const parsed = new Date(rawExpiresAt).getTime();
+    if (Number.isFinite(parsed) && parsed > now) return new Date(parsed).toISOString();
+  }
+  return new Date(now + durationMinutes * 60 * 1000).toISOString();
+}
+
 export function getPersonaRuntimeStatusId(persona) {
   return String(persona?._id || persona?.id || '').trim();
 }
@@ -69,19 +125,28 @@ export function isRuntimeStatusExpired(status, now = Date.now()) {
   return Number.isFinite(expiresAt) && expiresAt <= now;
 }
 
+export function getRuntimeStatusRemainingMs(status, now = Date.now()) {
+  if (!status?.expires_at) return 0;
+  const expiresAt = new Date(status.expires_at).getTime();
+  if (!Number.isFinite(expiresAt)) return 0;
+  return Math.max(0, expiresAt - now);
+}
+
 export function normalizeRuntimeStatus(status = {}, fallback = {}) {
   const now = Date.now();
   const source = status || {};
+  const durationMinutes = resolveDurationMinutes(source, fallback);
   const label = compactText(source.label || source.state || source.mood || fallback.label || '在线', 8) || '在线';
   const activity = compactText(source.activity || source.value || fallback.activity || '', 56);
   const mood = compactText(source.mood || fallback.mood || '', 12);
-  const expiresAt = source.expires_at || source.expiresAt || new Date(now + DEFAULT_STATUS_TTL_MS).toISOString();
+  const expiresAt = buildExpiresAt(source, durationMinutes, now);
 
   return {
     label,
     activity,
     mood,
     color: normalizeColor(source.color || source.tone || fallback.color),
+    duration_minutes: durationMinutes,
     updated_at: source.updated_at || source.updatedAt || new Date(now).toISOString(),
     expires_at: expiresAt,
     source: source.source || 'persona_runtime',
@@ -103,6 +168,10 @@ export function readRuntimeStatus(personaId) {
     console.warn('读取 Persona 运行状态失败:', error);
     return null;
   }
+}
+
+export function shouldRefreshRuntimeStatus(personaId) {
+  return !readRuntimeStatus(personaId);
 }
 
 export function persistRuntimeStatus(personaId, status) {
@@ -157,6 +226,7 @@ export function getRuntimeStatusFromT3(t3Content) {
       activity: t3.current_context.value,
       color: 'purple',
       expires_at: t3.current_context.expires_at,
+      duration_minutes: 60,
       source: 'current_context',
     });
     if (!isRuntimeStatusExpired(normalized)) return normalized;
@@ -174,9 +244,20 @@ export function getDisplayRuntimeStatus(persona) {
   if (t3Status) return t3Status;
 
   return normalizeRuntimeStatus({
-    label: '在线',
-    activity: '等待新的聊天信号',
-    color: 'green',
+    label: '待唤醒',
+    activity: '闹钟已就绪，下一次聊天时更新状态',
+    color: 'slate',
+    duration_minutes: 15,
     source: 'fallback',
   });
+}
+
+export function formatRuntimeStatusRemaining(status, now = Date.now()) {
+  const remainingMs = getRuntimeStatusRemainingMs(status, now);
+  if (remainingMs <= 0) return '等待唤醒';
+  const remainingMinutes = Math.ceil(remainingMs / 60000);
+  if (remainingMinutes < 60) return `约 ${remainingMinutes} 分钟后`;
+  const hours = Math.floor(remainingMinutes / 60);
+  const minutes = remainingMinutes % 60;
+  return minutes ? `约 ${hours} 小时 ${minutes} 分钟后` : `约 ${hours} 小时后`;
 }
