@@ -1,6 +1,6 @@
 import { cloudbase, db } from './cloudbase';
 import { estimateKeywordScore, normalizeMemoryRecord } from './dsm';
-import { extractAndPersistRuntimeStatusMarkers } from './personaRuntimeStatus';
+import { extractAndPersistRuntimeStatusMarkers, shouldRefreshRuntimeStatus } from './personaRuntimeStatus';
 
 const TOOL_NAME_PATTERN = /(retrieve_long_term_memory|search_subconscious_memory)/i;
 const TOOL_LEAK_PATTERN = /(DSML|tool_calls|tool_name|retrieve_long_term_memory|search_subconscious_memory)/i;
@@ -87,6 +87,7 @@ function sanitizeToolLeak(responseText) {
 
 function shouldInjectRuntimeStatusInstruction(promptText, systemInstructionText, personaId) {
   if (!personaId || personaId === 'default') return false;
+  if (!shouldRefreshRuntimeStatus(personaId)) return false;
   if (!systemInstructionText || /只输出合法JSON|严格按下方JSON输出/.test(systemInstructionText)) return false;
   const prompt = String(promptText || '');
   return prompt.includes('对话历史:') && prompt.includes('Assistant:');
@@ -95,14 +96,15 @@ function shouldInjectRuntimeStatusInstruction(promptText, systemInstructionText,
 function buildRuntimeStatusInstruction(personaId) {
   return `
 
-【Persona 运行状态栏】
-你每次正常聊天回复前，必须先输出一个隐藏状态标记，格式严格为：
-[status:{"personaId":"${personaId}","label":"短状态","activity":"正在做的事","color":"red|orange|yellow|green|blue|purple|pink|slate","mood":"情绪"}]
+【Persona 生活状态闹钟】
+你现在需要为自己决定一个生活化的当前状态，并预估它会持续多久。只在本轮回复最开头输出一次隐藏状态标记，格式严格为：
+[status:{"personaId":"${personaId}","label":"短状态","activity":"生活化正在做的事","color":"red|orange|yellow|green|blue|purple|pink|slate","mood":"情绪","duration_minutes":30}]
 要求：
-- label 是左上角短状态，最多 4 个中文字，例如：战斗中、摸鱼中、开心、警戒、充电中。
-- activity 是你自己此刻决定的“正在做的事情”，可以承接 T3 闪电状态，例如：正在和最好的朋友嘻嘻一起打怪兽。
+- label 是左上角短状态，最多 4 个中文字，例如：吃饭中、逛街中、喝奶茶、补觉中、摸鱼中、战斗中、发呆中。
+- activity 是你自己此刻决定的“正在做的事情”，优先生活化、日常化，也可以在剧情强烈时承接闪电状态。
+- duration_minutes 是你自己预估这个状态会持续多久，单位分钟，建议范围 10 到 180。吃饭可 30，喝奶茶可 25，逛街可 90，补觉可 120。
 - color 由你根据状态氛围自行选择，只能使用给定英文色名。
-- 这个标记是给前端看的，不要解释它，也不要把它当聊天内容。标记后继续正常回复。`;
+- 这个标记是给前端闹钟用的，不要解释它，也不要把它当聊天内容。标记后继续正常回复。`;
 }
 
 function stripRuntimeStatusMarkers(responseText) {
