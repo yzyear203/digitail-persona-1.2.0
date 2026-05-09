@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { BrainCircuit, DatabaseZap, Loader2, MessageSquareX, Save, UserPen, X } from 'lucide-react';
+import { BrainCircuit, Clock3, DatabaseZap, Loader2, MessageSquareX, Save, UserPen, X } from 'lucide-react';
 import { db } from '../../lib/cloudbase';
 import { upsertPersonaProfile } from '../../lib/profileStore';
-import { getDisplayRuntimeStatus, getPersonaRuntimeStatusId } from '../../lib/personaRuntimeStatus';
+import { formatRuntimeStatusRemaining, getDisplayRuntimeStatus, getPersonaRuntimeStatusId } from '../../lib/personaRuntimeStatus';
 
 function parseT3Content(content) {
   try {
@@ -46,6 +46,13 @@ function buildEmptyT3Profile(previousT3 = {}) {
   };
 }
 
+function formatWakeTime(status) {
+  if (!status?.expires_at) return '等待下一次聊天';
+  const time = new Date(status.expires_at);
+  if (Number.isNaN(time.getTime())) return '等待下一次聊天';
+  return time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
 export default function MemoryCabinV2({ activePersona, setActivePersona, showMsg, onClose, onClearChatHistory }) {
   const [isSaving, setIsSaving] = useState(false);
   const [personaName, setPersonaName] = useState(activePersona?.name || '');
@@ -70,6 +77,13 @@ export default function MemoryCabinV2({ activePersona, setActivePersona, showMsg
     window.addEventListener('persona-runtime-status-updated', handleRuntimeStatusUpdate);
     return () => window.removeEventListener('persona-runtime-status-updated', handleRuntimeStatusUpdate);
   }, [personaIdForStatus]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setRuntimeStatus(getDisplayRuntimeStatus(latestPersonaRef.current));
+    }, 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const refreshLocalPersona = (patch) => {
     setActivePersona(prev => {
@@ -209,14 +223,25 @@ export default function MemoryCabinV2({ activePersona, setActivePersona, showMsg
             <p className="text-[10px] text-slate-400 leading-relaxed">保存昵称会写入 personas.name 和 personas.content.persona_name，并立即从 TCB 回读校验。</p>
           </div>
 
-          <div className="bg-gradient-to-br from-rose-50 to-orange-50 p-5 rounded-2xl border border-rose-100 shadow-sm space-y-2">
-            <h3 className="text-xs font-black text-rose-800 flex items-center gap-1">🎭 Persona 自选状态栏</h3>
+          <div className="bg-gradient-to-br from-rose-50 to-orange-50 p-5 rounded-2xl border border-rose-100 shadow-sm space-y-3">
+            <h3 className="text-xs font-black text-rose-800 flex items-center gap-1">🎭 Persona 生活状态闹钟</h3>
             <div className="flex items-center gap-2">
-              <span className="px-2.5 py-1 rounded-full bg-white border border-rose-100 text-xs font-black text-rose-600">{runtimeStatus?.label || '在线'}</span>
-              <span className="text-[10px] font-black uppercase tracking-wider text-rose-400">{runtimeStatus?.color || 'green'}</span>
+              <span className="px-2.5 py-1 rounded-full bg-white border border-rose-100 text-xs font-black text-rose-600">{runtimeStatus?.label || '待唤醒'}</span>
+              <span className="text-[10px] font-black uppercase tracking-wider text-rose-400">{runtimeStatus?.color || 'slate'}</span>
             </div>
-            <p className="text-sm font-bold text-rose-900">{runtimeStatus?.activity || '等待新的聊天信号'}</p>
-            {runtimeStatus?.mood && <p className="text-[11px] text-rose-500 font-bold">情绪：{runtimeStatus.mood}</p>}
+            <p className="text-sm font-bold text-rose-900">{runtimeStatus?.activity || '闹钟已就绪，下一次聊天时更新状态'}</p>
+            <div className="grid grid-cols-2 gap-2 text-[11px] font-bold text-rose-500">
+              <div className="bg-white/70 rounded-xl px-3 py-2 border border-rose-100 flex items-center gap-1">
+                <Clock3 size={13} /> 唤醒：{formatWakeTime(runtimeStatus)}
+              </div>
+              <div className="bg-white/70 rounded-xl px-3 py-2 border border-rose-100">
+                剩余：{formatRuntimeStatusRemaining(runtimeStatus)}
+              </div>
+            </div>
+            <div className="text-[11px] text-rose-400 font-bold">
+              预估时长：{runtimeStatus?.duration_minutes || 45} 分钟{runtimeStatus?.mood ? ` · 情绪：${runtimeStatus.mood}` : ''}
+            </div>
+            <p className="text-[10px] text-rose-400 leading-relaxed">到点后不会后台自动请求模型；下一次正常聊天会唤醒 Persona 重新决定状态，左上角随之改变。</p>
           </div>
 
           <div className="bg-gradient-to-br from-indigo-50 to-purple-50 p-5 rounded-2xl border border-indigo-100 shadow-sm">
