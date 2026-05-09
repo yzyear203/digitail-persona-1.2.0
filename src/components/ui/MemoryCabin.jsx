@@ -53,20 +53,57 @@ function buildPersonalitySummary(personalityText) {
     .map((line, index) => ({ label: `摘要 ${index + 1}`, value: line.slice(0, 80) }));
 }
 
+function parseT3Content(content) {
+  try {
+    return JSON.parse(content || '{}');
+  } catch (parseError) {
+    console.warn('T3 内容解析失败，使用空对象兜底:', parseError);
+    return {};
+  }
+}
+
+function getPersonaDocId(persona) {
+  return persona?._id || persona?.id || '';
+}
+
+function getFirstDocData(response) {
+  if (Array.isArray(response?.data)) return response.data[0] || null;
+  return response?.data || null;
+}
+
+function buildEmptyT3Profile(previousT3 = {}) {
+  return {
+    persona_name: previousT3.persona_name || '',
+    identity: { value: '', confidence: 'low', last_updated: '', source_event_ids: [] },
+    personality: previousT3.personality || { value: '', confidence: 'low', last_updated: '', source_event_ids: [] },
+    interests: [],
+    relationship: {
+      archetype: previousT3.relationship?.archetype || '观察者',
+      intimacy_level: 1,
+      interaction_count: 0,
+      last_chat_time: '',
+      bond_momentum: 'stable'
+    },
+    current_context: { value: '', expires_at: '' },
+    user_name: '',
+    interaction_style: previousT3.interaction_style || {
+      quote_tendency: 'medium',
+      quote_triggers: [],
+      recall_tendency: 'low',
+      recall_triggers: [],
+    },
+    forbidden_topics: [],
+    pending_conflicts: []
+  };
+}
+
 export default function MemoryCabin({ activePersona, setActivePersona, showMsg, onClose, onClearChatHistory }) {
   const [isSaving, setIsSaving] = useState(false);
   const [newForbidden, setNewForbidden] = useState('');
   const [personaName, setPersonaName] = useState(activePersona?.name || '');
 
   // 初始化本地可编辑的 T3 状态
-  const [t3Data, setT3Data] = useState(() => {
-    try {
-      return JSON.parse(activePersona?.content || '{}');
-    } catch (parseError) {
-      console.warn('透明舱 T3 初始化解析失败:', parseError);
-      return {};
-    }
-  });
+  const [t3Data, setT3Data] = useState(() => parseT3Content(activePersona?.content));
 
   // 👑 首席修复：使用 ref 实时追踪最新的 activePersona，规避闭包陷阱
   const latestPersonaRef = useRef(activePersona);
@@ -78,13 +115,9 @@ export default function MemoryCabin({ activePersona, setActivePersona, showMsg, 
   // 👑 首席修复：仅在外部发生重大刷新且舱体未操作时，被动同步显示数据
   useEffect(() => {
     if (!activePersona?.content) return;
-    try {
-      const freshData = JSON.parse(activePersona.content);
-      // 仅做显示层面的防御性同步，不直接覆写，核心防冲突交由 syncToCloud 的函数式更新处理
-      setT3Data(prev => ({ ...freshData, ...prev }));
-    } catch (e) {
-      console.error("透明舱同步外部状态失败:", e);
-    }
+    const freshData = parseT3Content(activePersona.content);
+    // 仅做显示层面的防御性同步，不直接覆写，核心防冲突交由 syncToCloud 的函数式更新处理
+    setT3Data(prev => ({ ...freshData, ...prev }));
   }, [activePersona?.content]);
 
   // 👑 首席引擎重构：将前端修改一键同步至云端数据库与全局状态 (函数式更新防并发踩踏)
@@ -95,12 +128,7 @@ export default function MemoryCabin({ activePersona, setActivePersona, showMsg, 
       
       // 1. 同步前端聊天引擎的状态：使用 prev 函数式回调，获取执行瞬间的最绝对新鲜状态
       setActivePersona(prev => {
-        let latestT3 = {};
-        try {
-          latestT3 = JSON.parse(prev.content || '{}');
-        } catch (parseError) {
-          console.warn('透明舱同步前解析最新 T3 失败:', parseError);
-        }
+        const latestT3 = parseT3Content(prev.content);
         
         // 将局部修改精准打补丁到最新状态上
         const updatedT3 = updaterFunction(latestT3);
@@ -116,14 +144,14 @@ export default function MemoryCabin({ activePersona, setActivePersona, showMsg, 
       await Promise.resolve();
 
       // 2. 静默直连 TCB 数据库进行覆写，省去云函数调用
-      if (db && latestPersonaRef.current?.id) {
-        await db.collection('personas').doc(latestPersonaRef.current.id).update({
+      const personaId = getPersonaDocId(latestPersonaRef.current);
+      if (db && personaId) {
+        await db.collection('personas').doc(personaId).update({
           content: mergedStr
         });
         await upsertPersonaProfile({
-          personaId: latestPersonaRef.current.id,
+          personaId,
           t3Profile: JSON.parse(mergedStr || '{}'),
-          nickname: latestPersonaRef.current?.name,
         });
       }
       showMsg('✅ 状态舱已同步');
@@ -134,8 +162,6 @@ export default function MemoryCabin({ activePersona, setActivePersona, showMsg, 
     }
   };
 
-
-
   const handleSavePersonaName = async (e) => {
     e.preventDefault();
     const trimmedName = personaName.trim();
@@ -144,18 +170,54 @@ export default function MemoryCabin({ activePersona, setActivePersona, showMsg, 
       return;
     }
 
+    const currentPersona = latestPersonaRef.current || activePersona;
+    const personaId = getPersonaDocId(currentPersona);
+    if (!personaId) {
+      showMsg('❌ 昵称保存失败: 当前 Persona 缺少 TCB 文档 ID');
+      return;
+    }
+    if (!db) {
+      showMsg('❌ 昵称保存失败: 数据库未初始化');
+      return;
+    }
+
     setIsSaving(true);
     try {
-      setActivePersona(prev => ({ ...prev, name: trimmedName }));
-      if (db && latestPersonaRef.current?.id) {
-        await db.collection('personas').doc(latestPersonaRef.current.id).update({ name: trimmedName });
-        await upsertPersonaProfile({
-          personaId: latestPersonaRef.current.id,
-          t3Profile: t3Data,
-          nickname: trimmedName,
-        });
+      const latestT3 = parseT3Content(currentPersona?.content);
+      const nextT3 = { ...latestT3, persona_name: trimmedName };
+      const nextContent = JSON.stringify(nextT3);
+
+      await db.collection('personas').doc(personaId).update({
+        name: trimmedName,
+        content: nextContent,
+        updatedAt: Date.now(),
+      });
+
+      const verifyRes = await db.collection('personas').doc(personaId).get();
+      const remoteDoc = getFirstDocData(verifyRes);
+      const remoteT3 = parseT3Content(remoteDoc?.content);
+      const remoteName = remoteDoc?.name || remoteT3?.persona_name || '';
+
+      if (remoteName !== trimmedName) {
+        throw new Error(`TCB 回读校验失败：期望 ${trimmedName}，实际 ${remoteName || '空'}`);
       }
-      showMsg('✅ Persona 昵称已更新');
+
+      setT3Data(nextT3);
+      setActivePersona(prev => ({
+        ...prev,
+        _id: prev?._id || personaId,
+        id: prev?.id || personaId,
+        name: trimmedName,
+        content: nextContent,
+        updatedAt: remoteDoc?.updatedAt || Date.now(),
+      }));
+
+      await upsertPersonaProfile({
+        personaId,
+        t3Profile: nextT3,
+      });
+
+      showMsg('✅ Persona 昵称已写入 TCB 并通过回读校验');
     } catch (error) {
       showMsg('❌ 昵称保存失败: ' + error.message);
       setPersonaName(latestPersonaRef.current?.name || '');
@@ -163,23 +225,6 @@ export default function MemoryCabin({ activePersona, setActivePersona, showMsg, 
       setIsSaving(false);
     }
   };
-
-  const buildEmptyT3Profile = () => ({
-    identity: { value: '', confidence: 'low', last_updated: '', source_event_ids: [] },
-    personality: { value: '', confidence: 'low', last_updated: '', source_event_ids: [] },
-    interests: [],
-    relationship: {
-      archetype: '观察者',
-      intimacy_level: 1,
-      interaction_count: 0,
-      last_chat_time: '',
-      bond_momentum: 'stable'
-    },
-    current_context: { value: '', expires_at: '' },
-    user_name: '',
-    forbidden_topics: [],
-    pending_conflicts: []
-  });
 
   const removeMemoryDocsByField = async (field, personaId, removedIds) => {
     if (!db || !personaId) return 0;
@@ -207,8 +252,8 @@ export default function MemoryCabin({ activePersona, setActivePersona, showMsg, 
   const handleClearAllMemory = async () => {
     if (!window.confirm('确定清空全部记忆吗？这会清空 T3 状态档案、兴趣/禁忌/当前状态，以及长期记忆库；不会删除聊天记录。')) return;
 
-    const personaId = latestPersonaRef.current?.id;
-    const emptyT3 = buildEmptyT3Profile();
+    const personaId = getPersonaDocId(latestPersonaRef.current);
+    const emptyT3 = buildEmptyT3Profile(parseT3Content(latestPersonaRef.current?.content));
     const emptyT3Str = JSON.stringify(emptyT3);
 
     setIsSaving(true);
@@ -219,7 +264,7 @@ export default function MemoryCabin({ activePersona, setActivePersona, showMsg, 
 
       if (db && personaId) {
         await db.collection('personas').doc(personaId).update({ content: emptyT3Str });
-        await upsertPersonaProfile({ personaId, t3Profile: emptyT3, nickname: latestPersonaRef.current?.name });
+        await upsertPersonaProfile({ personaId, t3Profile: emptyT3 });
         const removedIds = new Set();
         await removeMemoryDocsByField('user_id', personaId, removedIds);
         await removeMemoryDocsByField('personaId', personaId, removedIds);
@@ -390,6 +435,10 @@ export default function MemoryCabin({ activePersona, setActivePersona, showMsg, 
                   {t3Data.identity?.confidence === 'medium' && <span className="text-amber-500 text-[10px] bg-amber-50 px-2 py-0.5 rounded">AI 推断</span>}
                 </h3>
                 <div className="space-y-2 mb-5">
+                  <div className="flex justify-between gap-3 text-sm">
+                    <span className="text-slate-400 font-black shrink-0">Persona：</span>
+                    <span className="text-slate-700 font-bold text-right">{t3Data.persona_name || activePersona?.name || '未获取'}</span>
+                  </div>
                   <div className="flex justify-between gap-3 text-sm">
                     <span className="text-slate-400 font-black shrink-0">称呼：</span>
                     <span className="text-slate-700 font-bold text-right">{t3Data.user_name || '未获取'}</span>
