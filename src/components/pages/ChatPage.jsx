@@ -5,9 +5,17 @@ import ChatInput from '../chat/ChatInput';
 import TasksModal from '../ui/TasksModal';
 import MemoryCabin from '../ui/MemoryCabin';
 import ChatAppearanceModal from '../ui/ChatAppearanceModal';
+import StickerPanel from '../stickers/StickerPanel';
 import { callDoubaoAPI, callDeepSeekAPI } from '../../lib/api';
 import { db } from '../../lib/cloudbase';
 import { upsertPersonaProfile } from '../../lib/profileStore';
+import {
+  createStickerMessage,
+  extractStickerKeyword,
+  getMessagePlainText,
+  isStickerMarker,
+  splitTextAndStickerMarkers,
+} from '../../lib/stickerMessage';
 import {
   hasContentSignal,
   getHotT1,
@@ -95,12 +103,16 @@ function stripControlMarkers(text) {
   return String(text || '').replace(CONTROL_MARKER_REGEX, '').trim();
 }
 
+function formatMessageForModel(message) {
+  return stripControlMarkers(getMessagePlainText(message));
+}
+
 function getLastUserQuote(messagesSnapshot) {
   const lastUserMsg = [...(messagesSnapshot || [])]
     .reverse()
-    .find(m => m.role === 'user' && stripControlMarkers(m.text));
+    .find(m => m.role === 'user' && formatMessageForModel(m));
 
-  const quoteText = stripControlMarkers(lastUserMsg?.text) || '最近这条消息';
+  const quoteText = formatMessageForModel(lastUserMsg) || '最近这条消息';
   return quoteText.replace(/\s+/g, ' ').slice(0, 24);
 }
 
@@ -171,6 +183,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   const [showTasksModal, setShowTasksModal] = useState(false);
   const [showMemoryCabin, setShowMemoryCabin] = useState(false);
   const [showAppearanceModal, setShowAppearanceModal] = useState(false);
+  const [showStickerPanel, setShowStickerPanel] = useState(false);
   const [extractedTasks, setExtractedTasks] = useState([]);
   const [isExtracting, setIsExtracting] = useState(false);
 
@@ -200,6 +213,39 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   const resolvePendingTypingAnimations = () => {
     typingResolversRef.current.forEach(resolve => resolve());
     typingResolversRef.current.clear();
+  };
+
+  const cancelPendingAssistantWork = () => {
+    generationNonce.current = Date.now();
+    if (pendingResponseTimerRef.current) {
+      clearTimeout(pendingResponseTimerRef.current);
+      pendingResponseTimerRef.current = null;
+    }
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    resolvePendingTypingAnimations();
+    setIsTypingIndicator(false);
+    if (extractTimerRef.current) clearTimeout(extractTimerRef.current);
+    return generationNonce.current;
+  };
+
+  const touchLastChatTime = () => {
+    try {
+      const t3 = JSON.parse(activePersonaRef.current?.content || '{}');
+      if (t3.relationship) {
+        t3.relationship.last_chat_time = new Date().toISOString();
+        const updatedContent = JSON.stringify(t3);
+        setActivePersona(prev => ({ ...prev, content: updatedContent }));
+
+        import('../../lib/cloudbase').then(({ db }) => {
+          if (db) db.collection('personas').doc(activeId).update({ content: updatedContent }).catch(() => {});
+        });
+      }
+    } catch (err) {
+      console.warn('更新最后聊天时间失败', err);
+    }
   };
 
   useEffect(() => {
@@ -278,7 +324,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
       try {
         const historyForExtraction = messages.slice(-IMMEDIATE_MEMORY_WINDOW)
           .filter(m => m.role !== 'system' && !m.isRecalled)
-          .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${stripControlMarkers(m.text)}`)
+          .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${formatMessageForModel(m)}`)
           .join('\n');
 
         const prompt = `分析以下最新对话，提取极具价值的增量记忆。
@@ -359,6 +405,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     const controller = new AbortController();
     abortControllerRef.current = controller;
     setIsTypingIndicator(true);
+    setShowStickerPanel(false);
     if (extractTimerRef.current) clearTimeout(extractTimerRef.current);
 
     try {
@@ -371,7 +418,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
       const recentT0 = messagesRef.current
         .filter(m => m.role !== 'system' && !m.isRecalled)
         .slice(-IMMEDIATE_MEMORY_WINDOW)
-        .map(m => ({ role: m.role, text: stripControlMarkers(m.text) }));
+        .map(m => ({ role: m.role, text: formatMessageForModel(m) }));
 
       const sysPromptLength = Math.ceil(sysPrompt.length / 1.5);
       const prunedT0 = applyBudgetAllocator(recentT0, sysPromptLength, 3000);
@@ -395,15 +442,27 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
       }
 
       const rawReplyParts = splitAssistantReply(responseText);
-      const replyParts = DEBUG_FORCE_QUOTE_RECALL
+      const normalizedReplyParts = DEBUG_FORCE_QUOTE_RECALL
         ? buildDebugQuoteRecallParts(rawReplyParts, messagesRef.current)
         : rawReplyParts;
+      const replyParts = normalizedReplyParts.flatMap(part => splitTextAndStickerMarkers(part));
       setIsTypingIndicator(false);
 
       for (let i = 0; i < replyParts.length; i++) {
         if (generationNonce.current !== currentNonce) break;
 
+        const part = replyParts[i];
         const messageId = Date.now() + i;
+
+        if (part.type === 'sticker_marker' || isStickerMarker(part.text)) {
+          const keyword = part.keyword || extractStickerKeyword(part.text);
+          const stickerMessage = await createStickerMessage({ role: 'assistant', keyword, id: messageId });
+          if (generationNonce.current !== currentNonce) break;
+          setMessages(prev => [...prev, stickerMessage]);
+          if (i < replyParts.length - 1) await new Promise(r => setTimeout(r, 420));
+          continue;
+        }
+
         const waitForTyping = new Promise(resolve => {
           typingResolversRef.current.set(messageId, resolve);
         });
@@ -413,7 +472,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
           {
             id: messageId,
             role: 'assistant',
-            text: replyParts[i],
+            text: part.text || String(part || ''),
             time: new Date().toLocaleTimeString(),
             isAnimated: true,
             typingPersona: personaSnapshot?.content || ''
@@ -483,6 +542,13 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     setQuotedMessage({ ...message, text });
   };
 
+  const scheduleAssistantAfterUserInput = (currentNonce) => {
+    pendingResponseTimerRef.current = setTimeout(() => {
+      pendingResponseTimerRef.current = null;
+      runAssistantResponse(currentNonce);
+    }, USER_SETTLE_DELAY_MS);
+  };
+
   const handleSendMessage = async (e) => {
     if (e) e.preventDefault();
     const userText = input.trim();
@@ -493,69 +559,49 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
 
     setInput('');
     setQuotedMessage(null);
+    setShowStickerPanel(false);
     persistDeclaredUserName(extractDeclaredUserName(userText));
 
-    const currentNonce = Date.now();
-    generationNonce.current = currentNonce;
-
-    if (pendingResponseTimerRef.current) {
-      clearTimeout(pendingResponseTimerRef.current);
-      pendingResponseTimerRef.current = null;
-    }
-
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-
-    resolvePendingTypingAnimations();
-    setIsTypingIndicator(false);
-    if (extractTimerRef.current) clearTimeout(extractTimerRef.current);
+    const currentNonce = cancelPendingAssistantWork();
 
     setMessages(prev => {
       const filtered = prev.filter(m => !(m.role === 'assistant' && m.isAnimated));
       return [...filtered, { id: currentNonce, role: 'user', text: messageText, time: new Date().toLocaleTimeString() }];
     });
 
-    try {
-      const t3 = JSON.parse(activePersonaRef.current?.content || '{}');
-      if (t3.relationship) {
-        t3.relationship.last_chat_time = new Date().toISOString();
-        const updatedContent = JSON.stringify(t3);
-        setActivePersona(prev => ({ ...prev, content: updatedContent }));
+    touchLastChatTime();
+    scheduleAssistantAfterUserInput(currentNonce);
+  };
 
-        import('../../lib/cloudbase').then(({ db }) => {
-          if (db) db.collection('personas').doc(activeId).update({ content: updatedContent }).catch(() => {});
-        });
-      }
-    } catch (err) {
-      console.warn('更新最后聊天时间失败', err);
-    }
+  const handleSendSticker = async (sticker) => {
+    if (!sticker) return;
+    setQuotedMessage(null);
+    setShowStickerPanel(false);
+    const currentNonce = cancelPendingAssistantWork();
 
-    pendingResponseTimerRef.current = setTimeout(() => {
-      pendingResponseTimerRef.current = null;
-      runAssistantResponse(currentNonce);
-    }, USER_SETTLE_DELAY_MS);
+    const stickerMessage = await createStickerMessage({
+      role: 'user',
+      sticker,
+      keyword: sticker.emotion || sticker.name,
+      id: currentNonce,
+    });
+
+    setMessages(prev => {
+      const filtered = prev.filter(m => !(m.role === 'assistant' && m.isAnimated));
+      return [...filtered, stickerMessage];
+    });
+
+    touchLastChatTime();
+    scheduleAssistantAfterUserInput(currentNonce);
   };
 
   const handleClearChatHistory = () => {
     if (!window.confirm('确定清空当前聊天记录吗？这只会删除对话气泡，不会清空任何记忆。')) return;
 
-    generationNonce.current = Date.now();
-    if (pendingResponseTimerRef.current) {
-      clearTimeout(pendingResponseTimerRef.current);
-      pendingResponseTimerRef.current = null;
-    }
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-    if (extractTimerRef.current) clearTimeout(extractTimerRef.current);
-    resolvePendingTypingAnimations();
-    setIsTypingIndicator(false);
-
+    cancelPendingAssistantWork();
     localStorage.removeItem(chatKey);
     setQuotedMessage(null);
+    setShowStickerPanel(false);
     setMessages([
       { id: Date.now(), role: 'system', text: 'SYSTEM_BOOT', time: new Date().toLocaleTimeString(), isAnimated: false }
     ]);
@@ -567,7 +613,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     try {
       const chatHistory = messages
         .filter(m => m.role !== 'system' && !m.isRecalled)
-        .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${stripControlMarkers(m.text)}`)
+        .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${formatMessageForModel(m)}`)
         .join('\n');
       const jsonResponse = await callDoubaoAPI(`分析对话，提取所有代办事项，没有返回空数组。\n\n${chatHistory}`, '严格输出 JSON 字符串数组，例如：["联系张三", "发送邮件"]。');
 
@@ -625,6 +671,15 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
           chatAppearance={chatAppearance}
           quotedMessage={quotedMessage}
           onClearQuote={() => setQuotedMessage(null)}
+          onToggleStickerPanel={() => setShowStickerPanel(prev => !prev)}
+          isStickerPanelOpen={showStickerPanel}
+        />
+
+        <StickerPanel
+          isOpen={showStickerPanel}
+          onClose={() => setShowStickerPanel(false)}
+          onSelectSticker={handleSendSticker}
+          chatAppearance={chatAppearance}
         />
 
         {showTasksModal && <TasksModal tasks={extractedTasks} onClose={() => setShowTasksModal(false)} />}
