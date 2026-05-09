@@ -62,6 +62,25 @@ function pickSampleLines(t3) {
   )).slice(0, 3);
 }
 
+function buildSanitizedRuntimeProfile(t3, publicInfo) {
+  return {
+    persona_name: publicInfo.name || t3.persona_name || '',
+    identity: t3.identity || { value: '', confidence: 'low' },
+    runtime_card: t3.runtime_card || t3.personality_runtime_card || { value: publicInfo.intro || '', confidence: 'medium' },
+    interests: Array.isArray(t3.interests) ? t3.interests.slice(0, 5) : [],
+    relationship: {
+      archetype: t3.relationship?.archetype || '访客',
+      intimacy_level: Math.min(Number(t3.relationship?.intimacy_level || 3), 5),
+      last_chat_time: new Date().toISOString(),
+      bond_momentum: 'stable',
+    },
+    interaction_style: t3.interaction_style || {},
+    sticker_style: t3.sticker_style || {},
+    current_context: { value: '', expires_at: '' },
+    forbidden_topics: Array.isArray(t3.forbidden_topics) ? t3.forbidden_topics.slice(0, 10) : [],
+  };
+}
+
 export function buildPublicPersonaSnapshot({ persona, userProfile, user }) {
   const t3 = safeJsonParse(persona?.content);
   const personaId = String(persona?.id || persona?._id || '').trim();
@@ -82,6 +101,36 @@ export function buildPublicPersonaSnapshot({ persona, userProfile, user }) {
   };
 }
 
+async function upsertPublicPersonaCopy({ persona, snapshot, sharePersonaId }) {
+  const t3 = safeJsonParse(persona?.content);
+  const runtimeProfile = buildSanitizedRuntimeProfile(t3, snapshot);
+  const publicCopy = {
+    uid: 'public_share',
+    name: snapshot.name,
+    avatarUrl: snapshot.avatarUrl || '',
+    content: JSON.stringify(runtimeProfile),
+    isPublicShare: true,
+    sourcePersonaId: snapshot.personaId,
+    creatorUid: snapshot.creatorUid,
+    publicIntro: snapshot.intro,
+    publicTags: snapshot.tags,
+    publicSampleLines: snapshot.sampleLines,
+    creatorNickname: snapshot.creatorNickname,
+    createdAt: persona?.createdAt || Date.now(),
+    updatedAt: Date.now(),
+  };
+
+  if (sharePersonaId) {
+    await db.collection('personas').doc(sharePersonaId).update(publicCopy);
+    return sharePersonaId;
+  }
+
+  const addRes = await db.collection('personas').add(publicCopy);
+  const id = addRes.id || addRes._id;
+  if (!id) throw new Error('公开人格副本创建成功，但未拿到 shareId');
+  return id;
+}
+
 export async function ensurePublicPersona({ persona, userProfile, user }) {
   if (!db) throw new Error('CloudBase 数据库未初始化');
 
@@ -95,19 +144,28 @@ export async function ensurePublicPersona({ persona, userProfile, user }) {
     .get();
 
   const existing = existingRes.data?.[0];
+  const sharePersonaId = await upsertPublicPersonaCopy({
+    persona,
+    snapshot,
+    sharePersonaId: existing?.sharePersonaId,
+  });
+
+  const publicRecord = {
+    ...snapshot,
+    sharePersonaId,
+  };
+
   if (existing?._id) {
-    await db.collection('public_personas').doc(existing._id).update(snapshot);
-    return { ...existing, ...snapshot, id: existing._id };
+    await db.collection('public_personas').doc(existing._id).update(publicRecord);
+    return { ...existing, ...publicRecord, id: sharePersonaId, publicPersonaId: existing._id };
   }
 
   const addRes = await db.collection('public_personas').add({
-    ...snapshot,
+    ...publicRecord,
     createdAt: Date.now(),
   });
 
-  const id = addRes.id || addRes._id;
-  if (!id) throw new Error('公开分享创建成功，但未拿到 shareId');
-  return { ...snapshot, id };
+  return { ...publicRecord, id: sharePersonaId, publicPersonaId: addRes.id || addRes._id };
 }
 
 export async function fetchSharedPersonaByShareId(shareId) {
