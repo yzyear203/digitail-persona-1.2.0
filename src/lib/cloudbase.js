@@ -6,6 +6,44 @@ let auth = null;
 let db = null;
 let sdkInitError = null;
 
+function withPublicShareRouting(rawDb, app) {
+  if (!rawDb || !app) return rawDb;
+
+  return {
+    ...rawDb,
+    collection(name) {
+      const collectionRef = rawDb.collection(name);
+      if (name !== 'personas') return collectionRef;
+
+      return {
+        ...collectionRef,
+        doc(id) {
+          const docRef = collectionRef.doc(id);
+          const docId = String(id || '');
+          if (!docId.startsWith('public_')) return docRef;
+
+          return {
+            ...docRef,
+            async get() {
+              const res = await app.callFunction({
+                name: 'get_public_persona',
+                data: { shareId: docId },
+                timeout: 15000,
+              });
+
+              if (!res.result?.success || !res.result?.persona) {
+                throw new Error(res.result?.error || '公开人格不存在或已关闭分享');
+              }
+
+              return { data: [res.result.persona] };
+            },
+          };
+        },
+      };
+    },
+  };
+}
+
 try {
   const envId = import.meta.env.VITE_CLOUDBASE_ENV_ID;
   const region = import.meta.env.VITE_CLOUDBASE_REGION;
@@ -28,7 +66,7 @@ try {
 
   tcb = cloudbase.init(config);
   auth = tcb.auth({ persistence: 'local' });
-  db = tcb.database();
+  db = withPublicShareRouting(tcb.database(), tcb);
 
 } catch (err) {
   console.error("底层初始化失败:", err);
