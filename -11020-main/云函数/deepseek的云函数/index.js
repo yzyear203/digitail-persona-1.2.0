@@ -30,7 +30,6 @@ function cosineSimilarity(vecA, vecB) {
   return denominator ? dot / denominator : 0;
 }
 
-
 function isDeepSeekBusyError(error = {}) {
   const message = typeof error === 'string'
     ? error
@@ -44,13 +43,66 @@ async function postDeepSeek(payload) {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${DEEPSEEK_API_KEY}` },
     body: JSON.stringify(payload)
   });
-  return await res.json();
+  const data = await res.json();
+  if (!res.ok && !data.error) {
+    data.error = { message: `HTTP ${res.status}` };
+  }
+  return data;
 }
 
 function keywordScore(content, query) {
   const keywords = Array.from(new Set(String(query || '').split('').filter(Boolean)));
   if (!keywords.length || !content) return 0;
   return keywords.filter(keyword => content.includes(keyword)).length / keywords.length;
+}
+
+function normalizeUsage(usage = {}) {
+  const promptTokens = usage.prompt_tokens ?? usage.input_tokens ?? 0;
+  const completionTokens = usage.completion_tokens ?? usage.output_tokens ?? 0;
+  const totalTokens = usage.total_tokens ?? promptTokens + completionTokens;
+  const cacheHitTokens = usage.prompt_cache_hit_tokens ?? usage.cache_hit_tokens ?? 0;
+  const cacheMissTokens = usage.prompt_cache_miss_tokens ?? usage.cache_miss_tokens ?? Math.max(0, promptTokens - cacheHitTokens);
+
+  return {
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens,
+    total_tokens: totalTokens,
+    prompt_cache_hit_tokens: cacheHitTokens,
+    prompt_cache_miss_tokens: cacheMissTokens,
+  };
+}
+
+function mergeUsage(...usages) {
+  return usages
+    .filter(Boolean)
+    .map(normalizeUsage)
+    .reduce((acc, usage) => ({
+      prompt_tokens: acc.prompt_tokens + usage.prompt_tokens,
+      completion_tokens: acc.completion_tokens + usage.completion_tokens,
+      total_tokens: acc.total_tokens + usage.total_tokens,
+      prompt_cache_hit_tokens: acc.prompt_cache_hit_tokens + usage.prompt_cache_hit_tokens,
+      prompt_cache_miss_tokens: acc.prompt_cache_miss_tokens + usage.prompt_cache_miss_tokens,
+    }), {
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      total_tokens: 0,
+      prompt_cache_hit_tokens: 0,
+      prompt_cache_miss_tokens: 0,
+    });
+}
+
+function attachUsageMeta(data, meta = {}) {
+  if (!data || data.error) return data;
+  const usage = normalizeUsage(data.usage || {});
+  return {
+    ...data,
+    usage,
+    x_usage: {
+      provider: 'deepseek',
+      ...meta,
+      ...usage,
+    },
+  };
 }
 
 async function retrieveLongTermMemory(personaId, query) {
@@ -88,8 +140,16 @@ async function retrieveLongTermMemory(personaId, query) {
 }
 
 exports.main = async (event = {}, _context = {}) => {
-  const { messages = [], model, personaId = 'default', enableMemoryTools = true } = event;
-  const actualModel = model === 'deepseek-v4-pro' ? 'deepseek-reasoner' : 'deepseek-chat';
+  const {
+    messages = [],
+    model,
+    personaId = 'default',
+    enableMemoryTools = true,
+    usageScene = 'unknown',
+    requestId = `deepseek_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+  } = event;
+  const requestedModel = model === 'deepseek-v4-pro' ? 'deepseek-v4-pro' : 'deepseek-v4-flash';
+  const actualModel = requestedModel === 'deepseek-v4-pro' ? 'deepseek-reasoner' : 'deepseek-chat';
 
   const tools = [{
     type: 'function',
@@ -109,16 +169,18 @@ exports.main = async (event = {}, _context = {}) => {
       ? { model: actualModel, messages, tools, tool_choice: 'auto' }
       : { model: actualModel, messages };
     let initialData = await postDeepSeek(initialPayload);
+    let firstHopModel = actualModel;
 
     if (initialData.error && actualModel === 'deepseek-reasoner' && isDeepSeekBusyError(initialData.error)) {
       console.warn('DeepSeek reasoner 忙碌，云函数自动降级到 deepseek-chat 重试一次:', initialData.error.message);
       initialData = await postDeepSeek({ ...initialPayload, model: 'deepseek-chat' });
+      firstHopModel = 'deepseek-chat';
     }
 
     if (initialData.error) return initialData;
 
-    const responseMessage = initialData.choices[0].message;
-    if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
+    const responseMessage = initialData.choices?.[0]?.message;
+    if (responseMessage?.tool_calls && responseMessage.tool_calls.length > 0) {
       messages.push(responseMessage);
 
       for (const toolCall of responseMessage.tool_calls) {
@@ -137,14 +199,49 @@ exports.main = async (event = {}, _context = {}) => {
       }
 
       let finalData = await postDeepSeek({ model: actualModel, messages });
+      let secondHopModel = actualModel;
       if (finalData.error && actualModel === 'deepseek-reasoner' && isDeepSeekBusyError(finalData.error)) {
         console.warn('DeepSeek reasoner 二跳忙碌，云函数自动降级到 deepseek-chat 重试一次:', finalData.error.message);
         finalData = await postDeepSeek({ model: 'deepseek-chat', messages });
+        secondHopModel = 'deepseek-chat';
       }
-      return finalData;
+      if (finalData.error) return finalData;
+
+      const mergedUsage = mergeUsage(initialData.usage, finalData.usage);
+      return {
+        ...finalData,
+        usage: mergedUsage,
+        x_usage: {
+          provider: 'deepseek',
+          request_id: requestId,
+          scene: usageScene,
+          personaId,
+          requested_model: requestedModel,
+          first_hop_model: firstHopModel,
+          second_hop_model: secondHopModel,
+          model: requestedModel,
+          actual_model: secondHopModel,
+          model_call_count: 2,
+          memory_tool_used: true,
+          ...mergedUsage,
+          hops: [
+            { model: firstHopModel, usage: normalizeUsage(initialData.usage || {}) },
+            { model: secondHopModel, usage: normalizeUsage(finalData.usage || {}) },
+          ],
+        }
+      };
     }
 
-    return initialData;
+    return attachUsageMeta(initialData, {
+      request_id: requestId,
+      scene: usageScene,
+      personaId,
+      requested_model: requestedModel,
+      model: requestedModel,
+      actual_model: firstHopModel,
+      model_call_count: 1,
+      memory_tool_used: false,
+    });
   } catch (error) {
     return { error: { message: error.message } };
   }
