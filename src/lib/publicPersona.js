@@ -119,7 +119,7 @@ export async function ensurePublicPersona({ persona, userProfile, user }) {
   const existing = existingRes.data?.[0];
   if (existing?._id) {
     await db.collection('public_personas').doc(existing._id).update(snapshot);
-    return { ...existing, ...snapshot, id: existing._id };
+    return { ...existing, ...snapshot, id: `public_${existing._id}`, publicPersonaId: existing._id };
   }
 
   const addRes = await db.collection('public_personas').add({
@@ -129,7 +129,7 @@ export async function ensurePublicPersona({ persona, userProfile, user }) {
 
   const id = addRes.id || addRes._id;
   if (!id) throw new Error('公开分享创建成功，但未拿到 shareId');
-  return { ...snapshot, id };
+  return { ...snapshot, id: `public_${id}`, publicPersonaId: id };
 }
 
 export async function fetchSharedPersonaByShareId(shareId) {
