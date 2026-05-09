@@ -33,53 +33,25 @@ function sanitizeRuntimeProfile(rawContent, publicInfo = {}) {
   };
 }
 
-function buildSharedPersona({ shareId, persona, publicInfo = {} }) {
-  const runtimeProfile = persona.isPublicShare
-    ? sanitizeRuntimeProfile(persona.content, {
-        name: persona.name,
-        intro: persona.publicIntro,
-      })
-    : sanitizeRuntimeProfile(persona.content, publicInfo);
+function buildSharedPersona({ shareId, publicInfo }) {
+  const runtimeProfile = sanitizeRuntimeProfile(publicInfo.content, publicInfo);
 
   return {
     id: `share_${shareId}`,
-    sourcePersonaId: persona.sourcePersonaId || publicInfo.personaId || persona._id || shareId,
+    sourcePersonaId: publicInfo.personaId || '',
     shareId,
-    name: publicInfo.name || persona.name || '公开数字人格',
-    avatarUrl: publicInfo.avatarUrl || persona.avatarUrl || '',
+    name: publicInfo.name || '公开数字人格',
+    avatarUrl: publicInfo.avatarUrl || '',
     isSharedPersona: true,
     content: JSON.stringify(runtimeProfile),
     publicInfo: {
-      intro: publicInfo.intro || persona.publicIntro || '',
-      tags: publicInfo.tags || persona.publicTags || [],
-      sampleLines: publicInfo.sampleLines || persona.publicSampleLines || [],
-      creatorNickname: publicInfo.creatorNickname || persona.creatorNickname || '匿名创作者',
+      intro: publicInfo.intro || '',
+      tags: publicInfo.tags || [],
+      sampleLines: publicInfo.sampleLines || [],
+      creatorNickname: publicInfo.creatorNickname || '匿名创作者',
     },
-    createdAt: publicInfo.createdAt || persona.createdAt || Date.now(),
+    createdAt: publicInfo.createdAt || Date.now(),
   };
-}
-
-async function getByPublicRecord(shareId) {
-  const publicRes = await db.collection('public_personas').doc(shareId).get();
-  const publicInfo = normalizeDoc(publicRes.data);
-
-  if (!publicInfo || publicInfo.isPublic === false) return null;
-
-  const personaId = String(publicInfo.sharePersonaId || publicInfo.personaId || '').trim();
-  if (!personaId) throw new Error('公开人格缺少 personaId');
-
-  const personaRes = await db.collection('personas').doc(personaId).get();
-  const persona = normalizeDoc(personaRes.data);
-  if (!persona) throw new Error('原始人格已删除或不可用');
-
-  return buildSharedPersona({ shareId, persona, publicInfo });
-}
-
-async function getBySanitizedPersonaCopy(shareId) {
-  const personaRes = await db.collection('personas').doc(shareId).get();
-  const persona = normalizeDoc(personaRes.data);
-  if (!persona || persona.isPublicShare !== true) return null;
-  return buildSharedPersona({ shareId, persona });
 }
 
 exports.main = async (event = {}) => {
@@ -89,11 +61,14 @@ exports.main = async (event = {}) => {
   }
 
   try {
-    const sharedPersona = await getBySanitizedPersonaCopy(shareId) || await getByPublicRecord(shareId);
-    if (!sharedPersona) {
+    const publicRes = await db.collection('public_personas').doc(shareId).get();
+    const publicInfo = normalizeDoc(publicRes.data);
+
+    if (!publicInfo || publicInfo.isPublic === false) {
       return { success: false, error: '公开人格不存在或已关闭分享' };
     }
-    return { success: true, persona: sharedPersona };
+
+    return { success: true, persona: buildSharedPersona({ shareId, publicInfo }) };
   } catch (error) {
     console.error('get_public_persona failed:', error);
     return { success: false, error: error.message || '公开人格读取失败' };
