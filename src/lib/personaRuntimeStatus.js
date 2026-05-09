@@ -106,8 +106,19 @@ function resolveDurationMinutes(source, fallback) {
   );
 }
 
+function getRawExpiresAt(source = {}) {
+  return source.expires_at || source.expiresAt || '';
+}
+
+function isRawStatusExpired(source, now = Date.now()) {
+  const rawExpiresAt = getRawExpiresAt(source);
+  if (!rawExpiresAt) return false;
+  const expiresAt = new Date(rawExpiresAt).getTime();
+  return Number.isFinite(expiresAt) && expiresAt <= now;
+}
+
 function buildExpiresAt(source, durationMinutes, now) {
-  const rawExpiresAt = source.expires_at || source.expiresAt;
+  const rawExpiresAt = getRawExpiresAt(source);
   if (rawExpiresAt) {
     const parsed = new Date(rawExpiresAt).getTime();
     if (Number.isFinite(parsed) && parsed > now) return new Date(parsed).toISOString();
@@ -120,9 +131,7 @@ export function getPersonaRuntimeStatusId(persona) {
 }
 
 export function isRuntimeStatusExpired(status, now = Date.now()) {
-  if (!status?.expires_at) return false;
-  const expiresAt = new Date(status.expires_at).getTime();
-  return Number.isFinite(expiresAt) && expiresAt <= now;
+  return isRawStatusExpired(status, now);
 }
 
 export function getRuntimeStatusRemainingMs(status, now = Date.now()) {
@@ -155,17 +164,24 @@ export function normalizeRuntimeStatus(status = {}, fallback = {}) {
 
 export function readRuntimeStatus(personaId) {
   if (typeof localStorage === 'undefined' || !personaId) return null;
+  const storageKey = `${RUNTIME_STATUS_STORAGE_PREFIX}${personaId}`;
   try {
-    const raw = localStorage.getItem(`${RUNTIME_STATUS_STORAGE_PREFIX}${personaId}`);
+    const raw = localStorage.getItem(storageKey);
     if (!raw) return null;
-    const status = normalizeRuntimeStatus(JSON.parse(raw));
-    if (isRuntimeStatusExpired(status)) {
-      localStorage.removeItem(`${RUNTIME_STATUS_STORAGE_PREFIX}${personaId}`);
+    const parsed = JSON.parse(raw);
+    if (isRawStatusExpired(parsed)) {
+      localStorage.removeItem(storageKey);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('persona-runtime-status-expired', {
+          detail: { personaId },
+        }));
+      }
       return null;
     }
-    return status;
+    return normalizeRuntimeStatus(parsed);
   } catch (error) {
     console.warn('读取 Persona 运行状态失败:', error);
+    localStorage.removeItem(storageKey);
     return null;
   }
 }
@@ -215,13 +231,12 @@ export function extractAndPersistRuntimeStatusMarkers(text) {
 export function getRuntimeStatusFromT3(t3Content) {
   const t3 = parseMaybeJSON(t3Content);
   const runtimeStatus = t3.runtime_status || t3.persona_runtime_status;
-  if (runtimeStatus) {
-    const normalized = normalizeRuntimeStatus(runtimeStatus);
-    if (!isRuntimeStatusExpired(normalized)) return normalized;
+  if (runtimeStatus && !isRawStatusExpired(runtimeStatus)) {
+    return normalizeRuntimeStatus(runtimeStatus);
   }
 
-  if (t3.current_context?.value) {
-    const normalized = normalizeRuntimeStatus({
+  if (t3.current_context?.value && !isRawStatusExpired(t3.current_context)) {
+    return normalizeRuntimeStatus({
       label: '进行中',
       activity: t3.current_context.value,
       color: 'purple',
@@ -229,7 +244,6 @@ export function getRuntimeStatusFromT3(t3Content) {
       duration_minutes: 60,
       source: 'current_context',
     });
-    if (!isRuntimeStatusExpired(normalized)) return normalized;
   }
 
   return null;
@@ -243,13 +257,16 @@ export function getDisplayRuntimeStatus(persona) {
   const t3Status = getRuntimeStatusFromT3(persona?.content);
   if (t3Status) return t3Status;
 
-  return normalizeRuntimeStatus({
+  return {
     label: '待唤醒',
-    activity: '闹钟已就绪，下一次聊天时更新状态',
+    activity: '闹钟已到点，下一次聊天时更新状态',
+    mood: '',
     color: 'slate',
-    duration_minutes: 15,
+    duration_minutes: 0,
+    updated_at: new Date().toISOString(),
+    expires_at: '',
     source: 'fallback',
-  });
+  };
 }
 
 export function formatRuntimeStatusRemaining(status, now = Date.now()) {
