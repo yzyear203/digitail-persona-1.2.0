@@ -1,7 +1,16 @@
 import React from 'react';
-import { Quote, Send, X } from 'lucide-react';
+import { Quote, Send, SmilePlus, X } from 'lucide-react';
 
-export default function ChatInput({ input, setInput, handleSendMessage, chatAppearance, quotedMessage, onClearQuote }) {
+export default function ChatInput({
+  input,
+  setInput,
+  handleSendMessage,
+  chatAppearance,
+  quotedMessage,
+  onClearQuote,
+  onToggleStickerPanel,
+  isStickerPanelOpen,
+}) {
   const isDark = chatAppearance?.theme === 'dark';
   const footerClass = isDark
     ? 'bg-slate-950/95 border-slate-800'
@@ -12,6 +21,12 @@ export default function ChatInput({ input, setInput, handleSendMessage, chatAppe
   const quoteClass = isDark
     ? 'bg-slate-900 border-slate-700 text-slate-300'
     : 'bg-emerald-50 border-emerald-100 text-slate-600';
+  const toolButtonClass = isDark
+    ? 'border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800 hover:text-emerald-300'
+    : 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-emerald-50 hover:text-emerald-600';
+  const activeToolClass = isDark
+    ? 'border-emerald-500 bg-emerald-500/10 text-emerald-300'
+    : 'border-emerald-300 bg-emerald-50 text-emerald-600';
 
   return (
     <footer className={`${footerClass} border-t p-4 md:p-5 transition-colors`}>
@@ -30,6 +45,14 @@ export default function ChatInput({ input, setInput, handleSendMessage, chatAppe
         )}
 
         <form onSubmit={handleSendMessage} className="flex gap-3 md:gap-4">
+          <button
+            type="button"
+            onClick={onToggleStickerPanel}
+            className={`w-14 border rounded-2xl flex items-center justify-center transition-all shrink-0 ${toolButtonClass} ${isStickerPanelOpen ? activeToolClass : ''}`}
+            title="表情包"
+          >
+            <SmilePlus size={23} />
+          </button>
           <input
             type="text"
             value={input}
