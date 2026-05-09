@@ -1,6 +1,7 @@
 // ==========================================
 // DSM 2.2 核心工具：Schema、Prompt 压缩、守门人与记忆记录规范化
 // ==========================================
+import { buildOfficialStickerPromptList, getOfficialStickerKeywordPresets } from './officialStickerCatalog';
 
 // ==========================================
 // 1. DSM 2.2 核心 Schema 定义 (防空指针预设)
@@ -29,9 +30,9 @@ export const DEFAULT_T3_PROFILE = {
     sticker_style: {
         use_tendency: "medium",
         trigger_rules: [
-            "强烈无语、震惊、想吐槽时可以发 [sticker:无语] 或 [sticker:震惊]",
-            "调侃、憋笑、熟人感很强时可以发 [sticker:笑死]",
-            "想安慰、缓和语气、卖乖时可以发 [sticker:安慰]"
+            "强烈无语、震惊、想吐槽时可以发对应官方表情包",
+            "调侃、憋笑、熟人感很强时可以发笑死类官方表情包",
+            "想安慰、缓和语气、卖乖时可以发抱抱、拜托、委屈类官方表情包"
         ],
     },
     forbidden_topics: [],
@@ -118,19 +119,24 @@ function formatStickerStyleBlock(t3) {
     const style = t3?.sticker_style || DEFAULT_T3_PROFILE.sticker_style;
     const rules = normalizeTriggerList(style.trigger_rules, 5);
     const tendency = style.use_tendency || 'medium';
+    const officialPresets = getOfficialStickerKeywordPresets().slice(0, 48).join('、');
+    const officialList = buildOfficialStickerPromptList();
 
-    let block = `【表情包系统】\n`;
-    block += `你可以像微信聊天一样发送表情包。\n`;
+    let block = `【官方表情包系统】\n`;
+    block += `你可以像微信聊天一样发送网站官方小黄人表情包。\n`;
     block += `发送格式必须单独写成一个气泡：[sticker:关键词]。\n`;
-    block += `可用关键词包括：无语、震惊、笑死、开心、安慰、生气、害羞、崩溃、疑惑、嘲讽、摸鱼、可爱。\n`;
+    block += `关键词可以使用“情绪分类”或“表情中文名”，例如：[sticker:无语]、[sticker:捂脸无语]、[sticker:笑死]、[sticker:咖啡续命]。\n`;
+    block += `高频可用关键词包括：${officialPresets}。\n`;
     block += `表情倾向：${tendency}\n`;
     if (rules.length > 0) {
-        block += `容易使用表情包的触发条件：\n${rules.map(rule => `- ${rule}`).join('\n')}\n`;
+        block += `当前 Persona 容易使用表情包的触发条件：\n${rules.map(rule => `- ${rule}`).join('\n')}\n`;
     }
+    block += `官方表情包含义字典：\n${officialList}\n`;
     block += `使用要求：\n`;
-    block += `- 表情包必须作为独立气泡出现，例如：文字|||[sticker:无语]|||文字。\n`;
+    block += `- 表情包必须作为独立气泡出现，例如：文字|||[sticker:捂脸无语]|||文字。\n`;
+    block += `- 优先选择语义最贴近当前情绪的官方表情，不要只机械使用“笑死/无语”。\n`;
     block += `- 不要解释图片内容，也不要把 [sticker:关键词] 写进普通句子里。\n`;
-    block += `- 表情包用于强情绪、调侃、安慰、无语、熟人感场景；不要每轮都用。\n`;
+    block += `- 表情包用于强情绪、调侃、安慰、无语、祝福、社交动作、生活反应；不要每轮都用。\n`;
 
     return block;
 }
@@ -272,7 +278,6 @@ export function saveToHotT1Cache(userId, summary) {
             if (Date.now() <= parsed.expires_at) data = parsed;
         }
         data.items.push({ summary, timestamp: Date.now() });
-        // 防止上下文爆满，最多保留 5 条近期 T1
         if (data.items.length > 5) data.items = data.items.slice(-5);
         localStorage.setItem(key, JSON.stringify(data));
     } catch (error) {
@@ -321,7 +326,6 @@ export function buildSystemPrompt(activePersona, hotT1, isCooling, daysSinceLast
         prompt += COLD_START_INSTRUCTION + "\n\n";
     }
 
-    // 禁忌话题装载
     if (t3.forbidden_topics && t3.forbidden_topics.length > 0) {
         prompt += `【绝对禁忌】严禁在对话中提及以下内容：${t3.forbidden_topics.join('、')}。\n\n`;
     }
@@ -336,10 +340,8 @@ export function applyBudgetAllocator(messages, sysPromptTokens, maxBudget = 4000
     let remainingBudget = maxBudget - sysPromptTokens;
     const result = [];
 
-    // 逆序遍历：优先保留最新消息，砍掉过早的对话历史
     for (let i = messages.length - 1; i >= 0; i--) {
         const msg = messages[i];
-        // 粗略估算：1 个中文字符约为 1.5 ~ 2 tokens
         const msgTokens = Math.ceil((msg.text || msg.content || "").length / 1.5);
         if (remainingBudget - msgTokens > 0) {
             result.unshift(msg);
@@ -465,10 +467,10 @@ export function buildT1MemoryRecord({ personaId, t1Event, sessionId = 'sess_acti
         event_id: eventId,
         idempotency_key: btoa(encodeURIComponent(idempotencyKeyRaw)).substring(0, 64),
         user_id: personaId,
-        personaId, // 兼容旧云函数/存量数据，后续迁移完成后可删除
+        personaId,
         memory_type: 't1_episodic',
         content: t1Event.summary,
-        text: t1Event.summary, // 兼容旧云函数/存量数据，后续迁移完成后可删除
+        text: t1Event.summary,
         importance_score: t1Event.importance,
         emotion: t1Event.emotion || 'neutral',
         confidence: t1Event.confidence || 'high',
