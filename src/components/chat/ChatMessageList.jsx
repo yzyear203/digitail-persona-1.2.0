@@ -14,8 +14,33 @@ function Avatar({ src, label, isUser, isDark }) {
   );
 }
 
-function cleanMessageText(text) {
-  return String(text || '')
+function StickerBubble({ sticker, isUser, isDark }) {
+  const label = sticker?.name || '表情包';
+  return (
+    <div className={`max-w-[46%] rounded-2xl p-2 shadow-sm ${isDark ? 'bg-slate-900/40' : 'bg-white/65'}`} title={label}>
+      <img
+        src={sticker?.url}
+        alt={label}
+        loading="lazy"
+        className="max-w-[138px] md:max-w-[168px] max-h-[138px] md:max-h-[168px] object-contain rounded-xl"
+        onError={event => {
+          event.currentTarget.style.display = 'none';
+        }}
+      />
+      <div className={`mt-1 text-[10px] font-bold truncate text-center ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+        {isUser ? '我方表情' : 'Persona 表情'} · {sticker?.emotion || sticker?.name || 'BQB'}
+      </div>
+    </div>
+  );
+}
+
+function cleanMessageText(message) {
+  if (message?.type === 'sticker') {
+    const sticker = message.sticker || {};
+    return `[表情包:${sticker.meaning || sticker.emotion || sticker.name || '表情'}]`;
+  }
+
+  return String(message?.text || message || '')
     .replace(/<\/?recall>|\[quote:.*?\]/g, '')
     .replace(/<del>.*?<\/del>/g, '')
     .trim();
@@ -58,7 +83,7 @@ export default function ChatMessageList({
     event.stopPropagation();
 
     if (message.isAnimated || message.isRecalled) return;
-    const text = cleanMessageText(message.text);
+    const text = cleanMessageText(message);
     if (!text) return;
 
     const menuWidth = 168;
@@ -96,18 +121,20 @@ export default function ChatMessageList({
         if (m.role === 'system') return null;
 
         const isUser = m.role === 'user';
-        const isRecallMsg = m.text.includes('<recall>');
-        const quoteMatch = m.text.match(/\[quote:\s*(.*?)\]/);
+        const isSticker = m.type === 'sticker';
+        const rawText = String(m.text || '');
+        const isRecallMsg = rawText.includes('<recall>');
+        const quoteMatch = rawText.match(/\[quote:\s*(.*?)\]/);
         const quoteText = quoteMatch ? quoteMatch[1] : null;
 
-        const actualText = m.text.replace(/<\/?recall>|\[quote:.*?\]/g, '').trim();
+        const actualText = rawText.replace(/<\/?recall>|\[quote:.*?\]/g, '').trim();
         const strippedText = actualText.replace(/<del>.*?<\/del>/g, '').trim();
 
         let showTime = false;
         const prevMsg = messages.slice(0, index).reverse().find(msg => msg.role !== 'system');
         if (!prevMsg || m.id - prevMsg.id > 300000) showTime = true;
 
-        if (!strippedText && !m.isAnimated && !m.isRecalled) return null;
+        if (!isSticker && !strippedText && !m.isAnimated && !m.isRecalled) return null;
 
         const bubbleClass = isUser
           ? 'bg-[#95ec69] text-slate-900 rounded-tr-md'
@@ -138,37 +165,43 @@ export default function ChatMessageList({
                   <Avatar src={assistantAvatar} label={activePersona?.name || 'Persona'} isUser={false} isDark={isDark} />
                 )}
 
-                <div
-                  onContextMenu={event => openContextMenu(event, m)}
-                  className={`max-w-[72%] px-5 py-3.5 rounded-2xl shadow-sm text-[15px] font-medium leading-relaxed cursor-default select-text ${bubbleClass}`}
-                >
-                  {quoteText && (
-                    <div className={`mb-2 p-2 rounded-lg border-l-4 text-xs flex items-start gap-2 italic ${quoteClass}`}>
-                      <Quote size={12} className="shrink-0 mt-0.5" />
-                      <span className="truncate">{quoteText}</span>
-                    </div>
-                  )}
+                {isSticker ? (
+                  <div onContextMenu={event => openContextMenu(event, m)} className="cursor-default select-none">
+                    <StickerBubble sticker={m.sticker} isUser={isUser} isDark={isDark} />
+                  </div>
+                ) : (
+                  <div
+                    onContextMenu={event => openContextMenu(event, m)}
+                    className={`max-w-[72%] px-5 py-3.5 rounded-2xl shadow-sm text-[15px] font-medium leading-relaxed cursor-default select-text ${bubbleClass}`}
+                  >
+                    {quoteText && (
+                      <div className={`mb-2 p-2 rounded-lg border-l-4 text-xs flex items-start gap-2 italic ${quoteClass}`}>
+                        <Quote size={12} className="shrink-0 mt-0.5" />
+                        <span className="truncate">{quoteText}</span>
+                      </div>
+                    )}
 
-                  {m.role === 'assistant' && m.isAnimated ? (
-                    <TypingText
-                      content={actualText}
-                      persona={m.typingPersona || activePersona?.content || ''}
-                      scrollRef={messagesEndRef}
-                      onComplete={() => {
-                        if (isRecallMsg) {
-                          setTimeout(() => {
-                            setMessages(p => p.map(msg => msg.id === m.id ? { ...msg, isAnimated: false, isRecalled: true } : msg));
-                          }, 1200);
-                        } else {
-                          setMessages(p => p.map(msg => msg.id === m.id ? { ...msg, isAnimated: false } : msg));
-                        }
-                        onAssistantAnimationComplete?.(m.id);
-                      }}
-                    />
-                  ) : (
-                    <span className="whitespace-pre-wrap">{strippedText}</span>
-                  )}
-                </div>
+                    {m.role === 'assistant' && m.isAnimated ? (
+                      <TypingText
+                        content={actualText}
+                        persona={m.typingPersona || activePersona?.content || ''}
+                        scrollRef={messagesEndRef}
+                        onComplete={() => {
+                          if (isRecallMsg) {
+                            setTimeout(() => {
+                              setMessages(p => p.map(msg => msg.id === m.id ? { ...msg, isAnimated: false, isRecalled: true } : msg));
+                            }, 1200);
+                          } else {
+                            setMessages(p => p.map(msg => msg.id === m.id ? { ...msg, isAnimated: false } : msg));
+                          }
+                          onAssistantAnimationComplete?.(m.id);
+                        }}
+                      />
+                    ) : (
+                      <span className="whitespace-pre-wrap">{strippedText}</span>
+                    )}
+                  </div>
+                )}
 
                 {isUser && (
                   <Avatar src={userAvatar} label="我" isUser isDark={isDark} />
