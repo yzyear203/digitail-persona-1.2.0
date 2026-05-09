@@ -1,8 +1,9 @@
 import React, { useRef } from 'react';
 import { LogOut, Database, UploadCloud, CheckSquare } from 'lucide-react';
 import PersonaCard from '../ui/PersonaCard';
+import { ensurePublicPersona } from '../../lib/publicPersona';
 
-export default function DashboardPage({ userProfile, savedPersonas, uploadedFiles, setUploadedFiles, handleStartDistillation, handleDeleteSavedPersona, loadPersonaAndChat, handleLogout }) {
+export default function DashboardPage({ userProfile, user, savedPersonas, uploadedFiles, setUploadedFiles, handleStartDistillation, handleDeleteSavedPersona, loadPersonaAndChat, handleLogout }) {
   const fileInputRef = useRef(null);
 
   const handleFileUpload = async (e) => {
@@ -38,6 +39,19 @@ export default function DashboardPage({ userProfile, savedPersonas, uploadedFile
     setUploadedFiles(prev => [...prev, ...newFiles.filter(f => !f.warning)]);
   };
 
+  const handleSharePersona = async (e, persona) => {
+    e.stopPropagation();
+    try {
+      const publicPersona = await ensurePublicPersona({ persona, userProfile, user });
+      const shareUrl = `${window.location.origin}${window.location.pathname}?shareId=${publicPersona.id}`;
+      await navigator.clipboard.writeText(`我刚刚蒸馏出了数字分身【${publicPersona.name}】，性格极其真实，快来试探一下！\n🔗 链接直达: ${shareUrl}`);
+      alert('✅ 公开分享链接已复制！好友将通过隔离后的公开入口访问，不需要开放原始人格档案。');
+    } catch (error) {
+      console.error('生成公开分享失败:', error);
+      alert(`❌ 生成分享失败：${error.message}`);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col items-center p-6 font-sans">
       <div className="w-full max-w-5xl flex justify-end mb-6">
@@ -69,14 +83,7 @@ export default function DashboardPage({ userProfile, savedPersonas, uploadedFile
                   persona={p} 
                   onClick={() => loadPersonaAndChat(p)} 
                   onDelete={handleDeleteSavedPersona} 
-                  onShare={(e, p) => {
-                    e.stopPropagation();
-                    // 生成专属裂变链接
-                    const shareUrl = `${window.location.origin}${window.location.pathname}?shareId=${p.id}`;
-                    // 写入剪贴板
-                    navigator.clipboard.writeText(`我刚刚蒸馏出了数字分身【${p.name}】，性格极其真实，快来试探一下！\n🔗 链接直达: ${shareUrl}`);
-                    alert('✅ 裂变链接已复制！马上发给微信好友或群聊吧。');
-                  }}
+                  onShare={handleSharePersona}
                 />
               ))}
             </div>
