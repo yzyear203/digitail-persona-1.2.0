@@ -40,6 +40,26 @@ function compactRuntimeText(text, maxChars = 900) {
   return `${head} …… ${tail}`;
 }
 
+function buildDefaultMemoryStyle(persona) {
+  const interestTopics = Array.isArray(persona.interests)
+    ? persona.interests.slice(0, 3).map(item => item.topic).filter(Boolean)
+    : [];
+  const interestTrigger = interestTopics.length
+    ? `用户提到与${interestTopics.join('、')}相关的长期计划、进展、困难或结果`
+    : '';
+
+  return {
+    high_value_triggers: [
+      '用户明确说出自己的称呼、身份、长期目标或重要偏好',
+      '用户提到健康、关系、工作、学习、居住地等重要状态变化',
+      '用户提到带明确时间的计划、考试、面试、offer、签约或复查',
+      interestTrigger,
+    ].filter(Boolean).slice(0, 4),
+    batch_tendency: 'balanced',
+    last_updated: new Date().toISOString(),
+  };
+}
+
 function normalizePersonaContent(rawText) {
   const persona = JSON.parse(stripJsonFence(rawText));
   const nowISO = new Date().toISOString();
@@ -66,6 +86,21 @@ function normalizePersonaContent(rawText) {
     };
   }
 
+  const defaultMemoryStyle = buildDefaultMemoryStyle(persona);
+  if (!persona.memory_style || !Array.isArray(persona.memory_style.high_value_triggers) || persona.memory_style.high_value_triggers.length === 0) {
+    persona.memory_style = defaultMemoryStyle;
+  } else {
+    persona.memory_style = {
+      ...defaultMemoryStyle,
+      ...persona.memory_style,
+      high_value_triggers: persona.memory_style.high_value_triggers
+        .map(item => String(item || '').trim())
+        .filter(Boolean)
+        .slice(0, 5),
+      last_updated: persona.memory_style.last_updated || nowISO,
+    };
+  }
+
   return JSON.stringify(persona);
 }
 
@@ -85,7 +120,8 @@ function buildDistillationPrompt(material) {
 2. 输出必须是合法 JSON，不要 markdown，不要解释。
 3. personality.value 是完整侧写，用于状态舱展示和未来编辑，可以详细。
 4. runtime_card.value 是运行时人格卡，用于每轮聊天 prompt，必须压缩到 500~800 中文字，保留最影响说话方式的规则，禁止写成泛泛总结。
-5. personality.value 必须包含以下模块：
+5. memory_style.high_value_triggers 必须根据该人格在素材中真正会在意的事情生成 3 到 5 条，不要只写通用模板。它用于判断哪些用户信息值得立刻进入记忆提取。
+6. personality.value 必须包含以下模块：
 【一、打字节奏】速度快/中/慢；一次性连发条数范围；补发习惯和触发条件。
 【二、语言风格与社交面具】口头禅至少3个；收尾方式；标点习惯；打错字处理；试图维持的人设。
 【三、情绪表达与触发器】开心/不满表达方式；会激怒或冷处理的话题。
@@ -101,6 +137,12 @@ runtime_card.value 必须包含：
 - 亲密关系中的回应方式
 - 引用/撤回/表情包的触发偏好
 - 禁止动作描写、禁止过度解释
+
+memory_style.high_value_triggers 示例，只能参考，必须结合人格重写：
+- 如果人格很重视学习和计划：用户提到考试、家教、课程进度、学习计划变化。
+- 如果人格很重视关系和情绪：用户提到分手、冷战、亲密关系变化、明显情绪低落。
+- 如果人格偏事业/执行：用户提到项目、offer、面试、签约、离职、工作节点。
+- 如果人格偏照顾型：用户提到生病、医院、复查、作息崩坏、压力很大。
 
 引用触发条件参考：
 - 对方一条消息说了好几件事，需要挑一句回应。
@@ -134,6 +176,10 @@ runtime_card.value 必须包含：
   "sticker_style": {
     "use_tendency": "low/medium/high",
     "trigger_rules": ["这个人格什么时候适合发 [sticker:无语] / [sticker:笑死] / [sticker:安慰] 等"]
+  },
+  "memory_style": {
+    "high_value_triggers": ["这个人格会优先记住的用户事件1", "这个人格会优先记住的用户事件2", "这个人格会优先记住的用户事件3"],
+    "batch_tendency": "conservative/balanced/sensitive"
   }
 }
 
@@ -298,7 +344,7 @@ B: [说话内容]
 
       // ================= 阶段三：收尾刻录 =================
       setDistillProgress(90);
-      setDistillLogs(prev => [...prev, '[成功] DeepSeek 推演完毕，已生成完整侧写与运行时人格卡。']);
+      setDistillLogs(prev => [...prev, '[成功] DeepSeek 推演完毕，已生成完整侧写、运行时人格卡与记忆偏好。']);
       setDistillLogs(prev => [...prev, '[刻录] 正在将档案同步至云端数据库...']);
 
       const newPersona = {
