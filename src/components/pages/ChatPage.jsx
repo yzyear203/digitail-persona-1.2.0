@@ -24,14 +24,20 @@ import {
   applyBudgetAllocator,
   buildT1MemoryRecord,
   getDaysSince,
-  splitAssistantReply
+  splitAssistantReply,
+  normalizeMemoryRecord,
+  estimateKeywordScore
 } from '../../lib/dsm';
 
 const IMMEDIATE_MEMORY_WINDOW = 8;
 const USER_SETTLE_DELAY_MS = 3000;
+const MEMORY_BATCH_MIN_ITEMS = 3;
+const MEMORY_BATCH_MAX_WAIT_MS = 3 * 60 * 1000;
 const DEBUG_FORCE_QUOTE_RECALL = false;
 const DEBUG_RECALL_FALLBACK_TEXT = '撤回测试：如果组件正常，这条会先打出来，然后变成撤回提示。';
 const CONTROL_MARKER_REGEX = /<del>[\s\S]*?<\/del>|<\/?recall>|\[quote:[\s\S]*?\]/g;
+const MEMORY_PREFETCH_REGEX = /(还记得|记不记得|之前|上次|以前|我说过|你记得|记得我|我的计划|我的名字|我叫什么|医院|学校|大学|公司|offer|录取|考试|项目|家教|实习|面试|旅行|旅游|分手|失恋|离职|搬家)/i;
+const HIGH_VALUE_MEMORY_REGEX = /(我叫|叫我|我的名字是|我名字叫|本人叫|录取|offer|Offer|离职|失业|分手|失恋|生病|手术|怀孕|搬家|转专业|确诊|复查|面试|签约)/i;
 const DEFAULT_CHAT_APPEARANCE = {
   theme: 'light',
   userAvatar: '',
@@ -107,11 +113,12 @@ function formatMessageForModel(message) {
   return stripControlMarkers(getMessagePlainText(message));
 }
 
-function getLastUserQuote(messagesSnapshot) {
-  const lastUserMsg = [...(messagesSnapshot || [])]
-    .reverse()
-    .find(m => m.role === 'user' && formatMessageForModel(m));
+function getLatestUserMessage(messagesSnapshot) {
+  return [...(messagesSnapshot || [])].reverse().find(m => m.role === 'user' && formatMessageForModel(m));
+}
 
+function getLastUserQuote(messagesSnapshot) {
+  const lastUserMsg = getLatestUserMessage(messagesSnapshot);
   const quoteText = formatMessageForModel(lastUserMsg) || '最近这条消息';
   return quoteText.replace(/\s+/g, ' ').slice(0, 24);
 }
@@ -149,6 +156,90 @@ function getPersonaConversationState(persona) {
   }
 
   return { daysSinceLastChat, isCooling };
+}
+
+function shouldPrefetchLongTermMemory(messagesSnapshot) {
+  const latestUserText = formatMessageForModel(getLatestUserMessage(messagesSnapshot));
+  return MEMORY_PREFETCH_REGEX.test(latestUserText) || hasContentSignal(messagesSnapshot);
+}
+
+function buildMemoryQuery(messagesSnapshot) {
+  return [...(messagesSnapshot || [])]
+    .filter(m => m.role !== 'system' && !m.isRecalled)
+    .slice(-4)
+    .map(m => formatMessageForModel(m))
+    .filter(Boolean)
+    .join(' ')
+    .slice(-180);
+}
+
+async function prefetchLongTermMemory({ personaId, messagesSnapshot }) {
+  if (!db || !personaId || !shouldPrefetchLongTermMemory(messagesSnapshot)) return '';
+
+  const query = buildMemoryQuery(messagesSnapshot);
+  if (!query) return '';
+
+  try {
+    let queryRes = await db.collection('persona_memories')
+      .where({ user_id: personaId })
+      .orderBy('timestamp', 'desc')
+      .limit(30)
+      .get();
+
+    if (!queryRes.data?.length) {
+      queryRes = await db.collection('persona_memories')
+        .where({ personaId })
+        .orderBy('timestamp', 'desc')
+        .limit(30)
+        .get();
+    }
+
+    const scored = (queryRes.data || [])
+      .map(normalizeMemoryRecord)
+      .filter(memory => memory.content)
+      .map(memory => ({
+        ...memory,
+        keywordScore: estimateKeywordScore(memory.content, query),
+      }))
+      .sort((a, b) => b.keywordScore - a.keywordScore);
+
+    const matched = scored.filter(memory => memory.keywordScore > 0).slice(0, 4);
+    const fallback = MEMORY_PREFETCH_REGEX.test(query) ? scored.slice(0, 2) : [];
+    const finalMemories = matched.length ? matched : fallback;
+
+    if (!finalMemories.length) return '';
+
+    return `【可能相关的长期记忆】\n${finalMemories.map(memory => `- ${memory.content}`).join('\n')}\n请只在自然相关时使用这些记忆，不要生硬复述。`;
+  } catch (error) {
+    console.warn('长期记忆预取失败，跳过一跳式回源:', error);
+    return '';
+  }
+}
+
+function shouldForceMemoryExtraction(text) {
+  return HIGH_VALUE_MEMORY_REGEX.test(String(text || ''));
+}
+
+function buildMemoryExtractionItem(messagesSnapshot) {
+  const latestUserMsg = getLatestUserMessage(messagesSnapshot);
+  const history = (messagesSnapshot || [])
+    .slice(-IMMEDIATE_MEMORY_WINDOW)
+    .filter(m => m.role !== 'system' && !m.isRecalled)
+    .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${formatMessageForModel(m)}`)
+    .join('\n');
+
+  return {
+    id: latestUserMsg?.id || Date.now(),
+    userText: formatMessageForModel(latestUserMsg),
+    history,
+    createdAt: Date.now(),
+  };
+}
+
+function mergeExtractionBatch(items) {
+  return items
+    .map((item, index) => `【片段${index + 1}】\n${item.history}`)
+    .join('\n\n---\n\n');
 }
 
 async function writeMemoryThroughVectorize({ personaId, memoryRecord }) {
@@ -195,6 +286,9 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   const pendingResponseTimerRef = useRef(null);
   const messagesRef = useRef(messages);
   const activePersonaRef = useRef(activePersona);
+  const memoryExtractionBufferRef = useRef([]);
+  const lastMemoryExtractionAtRef = useRef(Date.now());
+  const lastBufferedUserMessageIdRef = useRef(null);
 
   const activeId = activePersona?.id || 'default';
   const accountId = user?.uid || userProfile?.uid || '';
@@ -258,6 +352,9 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
 
   useEffect(() => {
     setChatAppearance(getStoredChatAppearance(activeId, accountId));
+    memoryExtractionBufferRef.current = [];
+    lastBufferedUserMessageIdRef.current = null;
+    lastMemoryExtractionAtRef.current = Date.now();
   }, [activeId, accountId]);
 
   useEffect(() => {
@@ -320,20 +417,38 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
         return;
       }
 
-      console.log('[DSM 闪电通道] 启动近期记忆提取');
-      try {
-        const historyForExtraction = messages.slice(-IMMEDIATE_MEMORY_WINDOW)
-          .filter(m => m.role !== 'system' && !m.isRecalled)
-          .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${formatMessageForModel(m)}`)
-          .join('\n');
+      const latestUserMsg = getLatestUserMessage(messages);
+      const latestUserText = formatMessageForModel(latestUserMsg);
+      if (latestUserMsg?.id && lastBufferedUserMessageIdRef.current !== latestUserMsg.id) {
+        memoryExtractionBufferRef.current.push(buildMemoryExtractionItem(messages));
+        lastBufferedUserMessageIdRef.current = latestUserMsg.id;
+      }
 
-        const prompt = `分析以下最新对话，提取极具价值的增量记忆。
+      const shouldExtractNow = shouldForceMemoryExtraction(latestUserText)
+        || memoryExtractionBufferRef.current.length >= MEMORY_BATCH_MIN_ITEMS
+        || Date.now() - lastMemoryExtractionAtRef.current >= MEMORY_BATCH_MAX_WAIT_MS;
+
+      if (!shouldExtractNow) {
+        console.log(`[DSM 批量记忆] 暂存 ${memoryExtractionBufferRef.current.length}/${MEMORY_BATCH_MIN_ITEMS} 个候选片段，等待合并提取。`);
+        return;
+      }
+
+      const extractionBatch = memoryExtractionBufferRef.current.splice(0);
+      if (!extractionBatch.length) return;
+      lastMemoryExtractionAtRef.current = Date.now();
+
+      console.log(`[DSM 批量记忆] 合并 ${extractionBatch.length} 个片段后启动 Flash 提取`);
+      try {
+        const historyForExtraction = mergeExtractionBatch(extractionBatch);
+
+        const prompt = `分析以下最新对话片段，提取极具价值的增量记忆。
+这些片段可能来自同一段连续聊天，请尽量合并成一条更完整的事件记忆，避免碎片化。
 严禁提取无意义的日常，必须以第三人称陈述。
 重要性打分规则：日常小事0-3，明确计划4-7，重大节点或重要状态变化8-10。
 严格按下方JSON输出，不要包含markdown格式：
 { "importance": 9, "summary": "用户今天拿到了重要结果", "emotion": "excited", "confidence": "high" }
 其中 emotion 从 [happy, sad, neutral, excited, frustrated, anxious] 中选，confidence 从 [high, medium, low] 中选。如果没有硬核信息，importance 填 0。
-对话：\n${historyForExtraction}`;
+对话片段：\n${historyForExtraction}`;
 
         const resJSONStr = await callDeepSeekAPI(prompt, '你是一个只输出合法JSON的机器。', 'flash', null, activeId);
 
@@ -392,7 +507,8 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
           }
         }
       } catch (error) {
-        console.warn('Flash 提取中断:', error.message);
+        memoryExtractionBufferRef.current = [...extractionBatch, ...memoryExtractionBufferRef.current].slice(-MEMORY_BATCH_MIN_ITEMS);
+        console.warn('Flash 批量提取中断:', error.message);
       }
     }, 10000);
 
@@ -427,8 +543,11 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
         `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`
       ).join('\n');
 
+      const memoryPrefetchBlock = await prefetchLongTermMemory({ personaId, messagesSnapshot: messagesRef.current });
+      if (generationNonce.current !== currentNonce) return;
+
       const responseText = await callDeepSeekAPI(
-        `对话历史:\n${chatHistoryStr}\n\nAssistant:`,
+        `${memoryPrefetchBlock ? `${memoryPrefetchBlock}\n\n` : ''}对话历史:\n${chatHistoryStr}\n\nAssistant:`,
         sysPrompt,
         'flash',
         controller.signal,
