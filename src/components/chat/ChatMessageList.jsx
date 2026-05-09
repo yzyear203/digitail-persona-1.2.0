@@ -17,12 +17,12 @@ function Avatar({ src, label, isUser, isDark }) {
 function StickerBubble({ sticker }) {
   const label = sticker?.name || sticker?.emotion || '表情包';
   return (
-    <div className="max-w-[46%] select-none" title={label}>
+    <div className="max-w-[56%] select-none" title={label}>
       <img
         src={sticker?.url}
         alt={label}
         loading="lazy"
-        className="max-w-[148px] md:max-w-[178px] max-h-[148px] md:max-h-[178px] object-contain drop-shadow-sm"
+        className="max-w-[188px] md:max-w-[238px] max-h-[188px] md:max-h-[238px] object-contain drop-shadow-md"
         onError={event => {
           event.currentTarget.style.display = 'none';
         }}
