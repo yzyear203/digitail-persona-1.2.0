@@ -6,6 +6,7 @@
 // 1. DSM 2.2 核心 Schema 定义 (防空指针预设)
 // ==========================================
 export const DEFAULT_T3_PROFILE = {
+    persona_name: "",
     identity: { value: "", confidence: "low", last_updated: "", source_event_ids: [] },
     personality: { value: "", confidence: "low", last_updated: "", source_event_ids: [] },
     interests: [],
@@ -232,11 +233,11 @@ export function buildSystemPrompt(activePersona, hotT1, isCooling, daysSinceLast
         console.warn('T3 JSON 解析失败，使用空档案继续组装 Prompt:', error);
     }
 
-    const personaName = String(activePersona?.name || '').trim();
+    const personaName = String(activePersona?.name || t3?.persona_name || '').trim();
     let prompt = '';
 
     if (personaName) {
-        prompt += `【你的自我身份】你的名字是“${personaName}”。这是你作为 Persona 的名字，不是用户的名字。用户问“你叫什么/你是谁/你叫啥”时，应优先回答这个名字。不要把这个名字写入用户档案或当作用户称呼。\n\n`;
+        prompt += `【你的自我身份】你的名字是“${personaName}”。这是你作为 Persona 的名字，不是用户的名字。用户问“你叫什么/你是谁/你叫啥”时，必须直接回答你叫“${personaName}”。不要把这个名字写入用户档案或当作用户称呼。\n\n`;
     }
 
     prompt += formatT3Compact(t3) + "\n\n";
