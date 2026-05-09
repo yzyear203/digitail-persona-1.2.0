@@ -9,6 +9,7 @@ export const DEFAULT_T3_PROFILE = {
     persona_name: "",
     identity: { value: "", confidence: "low", last_updated: "", source_event_ids: [] },
     personality: { value: "", confidence: "low", last_updated: "", source_event_ids: [] },
+    runtime_card: { value: "", confidence: "low", last_updated: "", source_event_ids: [] },
     interests: [],
     relationship: {
         archetype: "观察者",
@@ -44,6 +45,31 @@ const CONFIDENCE_LABEL = {
 
 function shouldInjectField(field) {
     return Boolean(field?.value && field.confidence !== 'low');
+}
+
+function compactText(value, maxChars = 1200) {
+    const source = String(value || '').replace(/\s+/g, ' ').trim();
+    if (source.length <= maxChars) return source;
+    const head = source.slice(0, Math.floor(maxChars * 0.72));
+    const tail = source.slice(-Math.floor(maxChars * 0.22));
+    return `${head} …… ${tail}`;
+}
+
+function getRuntimePersonalityField(t3) {
+    const runtimeCard = t3?.runtime_card || t3?.personality_runtime_card || t3?.runtime_personality;
+    if (runtimeCard?.value) {
+        return { value: compactText(runtimeCard.value, 900), confidence: runtimeCard.confidence || 'high' };
+    }
+    if (typeof runtimeCard === 'string' && runtimeCard.trim()) {
+        return { value: compactText(runtimeCard, 900), confidence: 'high' };
+    }
+
+    const fullPersonality = t3?.personality?.value || '';
+    if (!fullPersonality) return { value: '', confidence: 'low' };
+    return {
+        value: compactText(fullPersonality, 1000),
+        confidence: t3?.personality?.confidence || 'medium',
+    };
 }
 
 function formatProfileField(label, field) {
@@ -132,7 +158,7 @@ export function formatT3Compact(t3) {
         if (topInterests) compactStr += `兴趣:${topInterests} | `;
     }
 
-    compactStr += formatProfileField('性格', safeT3.personality);
+    compactStr += formatProfileField('运行人格卡', getRuntimePersonalityField(safeT3));
 
     if (safeT3.relationship) {
         compactStr += `关系:${safeT3.relationship.archetype} 亲密度${safeT3.relationship.intimacy_level}/10 | `;
@@ -165,8 +191,10 @@ export const COOLING_INSTRUCTION = `
 【关系维系指令】与用户的关系处于冷却期，若话题自然，可以适时问一句暖心的关怀，不要刻意。
 `;
 
-export const T2_TOOL_DECLARATION = `
-{"tool_name":"retrieve_long_term_memory","description":"检索用户的长期语义记忆","trigger_when":"用户询问历史事件、话题涉及专业/旅行/重大决策时","input":{"query":"string"}}
+export const MEMORY_PREFETCH_INSTRUCTION = `
+【长期记忆规则】
+系统会在需要时把相关长期记忆预先放入对话。若看见“可能相关的长期记忆”，自然结合即可。
+严禁主动输出 retrieve_long_term_memory、search_subconscious_memory、tool_name、DSML 或任何工具 JSON。
 `;
 
 export const NATURAL_REPLY_GUARD = `
@@ -278,7 +306,7 @@ export function buildSystemPrompt(activePersona, hotT1, isCooling, daysSinceLast
 
     if (isCooling) prompt += COOLING_INSTRUCTION + "\n\n";
 
-    prompt += T2_TOOL_DECLARATION + "\n\n";
+    prompt += MEMORY_PREFETCH_INSTRUCTION + "\n\n";
 
     prompt += NATURAL_REPLY_GUARD + "\n\n";
 
