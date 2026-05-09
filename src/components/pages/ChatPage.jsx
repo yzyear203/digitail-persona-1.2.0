@@ -430,7 +430,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
       const responseText = await callDeepSeekAPI(
         `对话历史:\n${chatHistoryStr}\n\nAssistant:`,
         sysPrompt,
-        'pro',
+        'flash',
         controller.signal,
         personaId
       );
