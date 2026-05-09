@@ -1,77 +1,38 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Loader2, RefreshCcw, Search, X } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { Download, Search, Sparkles, Store, X } from 'lucide-react';
 import {
-  getSeedStickers,
+  getInstalledStickers,
+  getMarketStickerPacks,
   getStickerKeywordPresets,
-  loadChineseBqbStickers,
+  installStickerPack,
+  removeStickerPack,
+  searchMarketStickers,
   searchStickersSync,
 } from '../../lib/stickerStore';
 
 export default function StickerPanel({ isOpen, onClose, onSelectSticker, chatAppearance }) {
   const [query, setQuery] = useState('');
-  const [includeBqb, setIncludeBqb] = useState(false);
-  const [stickers, setStickers] = useState(() => getSeedStickers());
-  const [isLoading, setIsLoading] = useState(false);
-  const [sourceState, setSourceState] = useState('清爽反应包');
+  const [activeTab, setActiveTab] = useState('mine');
+  const [packs, setPacks] = useState(() => getMarketStickerPacks());
   const isDark = chatAppearance?.theme === 'dark';
   const presets = useMemo(() => getStickerKeywordPresets(), []);
 
-  useEffect(() => {
-    if (!isOpen) return;
-
-    setStickers(getSeedStickers());
-    setSourceState('清爽反应包');
-    if (!includeBqb) return;
-
-    let cancelled = false;
-    setIsLoading(true);
-    loadChineseBqbStickers()
-      .then(items => {
-        if (cancelled) return;
-        const clean = getSeedStickers();
-        setStickers([...clean, ...items]);
-        setSourceState(items.length > 100 ? `清爽反应包 + BQB ${items.length} 张` : '清爽反应包');
-      })
-      .catch(error => {
-        console.warn('表情包加载失败:', error);
-        if (!cancelled) {
-          setStickers(getSeedStickers());
-          setSourceState('清爽反应包');
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setIsLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [isOpen, includeBqb]);
-
+  const installedStickers = useMemo(() => getInstalledStickers(), [packs]);
   const filtered = useMemo(() => {
-    if (!query.trim()) return stickers.slice(0, includeBqb ? 120 : 24);
-    return searchStickersSync(query, includeBqb ? 120 : 24, { includeBqb });
-  }, [query, stickers, includeBqb]);
+    if (activeTab === 'market') return searchMarketStickers(query, 160);
+    if (!query.trim()) return installedStickers.slice(0, 96);
+    return searchStickersSync(query, 96);
+  }, [activeTab, query, installedStickers]);
 
-  const reloadRemote = async () => {
-    setIsLoading(true);
-    try {
-      const items = await loadChineseBqbStickers({ force: true });
-      const clean = getSeedStickers();
-      setIncludeBqb(true);
-      setStickers([...clean, ...items]);
-      setSourceState(items.length > 100 ? `清爽反应包 + BQB ${items.length} 张` : '清爽反应包');
-    } catch (error) {
-      console.warn('表情包刷新失败:', error);
-    } finally {
-      setIsLoading(false);
-    }
+  const handleTogglePack = pack => {
+    const nextPacks = pack.installed ? removeStickerPack(pack.id) : installStickerPack(pack.id);
+    setPacks(nextPacks);
   };
 
   if (!isOpen) return null;
 
   const shellClass = isDark
-    ? 'bg-slate-950/98 border-slate-800 text-slate-100 shadow-black/40'
+    ? 'bg-[#11181c]/98 border-slate-800 text-slate-100 shadow-black/40'
     : 'bg-white/98 border-slate-200 text-slate-900 shadow-slate-300/40';
   const inputClass = isDark
     ? 'bg-slate-900 border-slate-700 text-slate-100 placeholder:text-slate-500'
@@ -82,102 +43,158 @@ export default function StickerPanel({ isOpen, onClose, onSelectSticker, chatApp
   const activeTabClass = isDark
     ? 'bg-emerald-500/15 border-emerald-400 text-emerald-300'
     : 'bg-emerald-50 border-emerald-300 text-emerald-700';
+  const packCardClass = isDark
+    ? 'bg-slate-900/80 border-slate-800 hover:border-emerald-500/60'
+    : 'bg-slate-50 border-slate-200 hover:border-emerald-300';
 
   return (
-    <div className={`absolute left-4 right-4 bottom-[92px] md:left-1/2 md:right-auto md:-translate-x-1/2 md:w-[760px] max-h-[58vh] rounded-3xl border shadow-2xl z-[160] overflow-hidden ${shellClass}`}>
+    <div className={`absolute left-0 right-0 bottom-[88px] md:left-1/2 md:right-auto md:-translate-x-1/2 md:w-[860px] max-h-[68vh] md:max-h-[70vh] border-t md:border rounded-t-3xl md:rounded-3xl shadow-2xl z-[160] overflow-hidden ${shellClass}`}>
       <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-inherit">
         <div className="min-w-0">
-          <div className="font-black text-base">表情包</div>
-          <div className="text-xs opacity-60 truncate">默认使用不辣眼的清爽反应包 · {sourceState}</div>
+          <div className="font-black text-base flex items-center gap-2">
+            <Store size={18} className="text-emerald-500" /> Digitail 表情市场
+          </div>
+          <div className="text-xs opacity-60 truncate">原创大表情包 · SVG 动图原型 · 不使用外部搬运素材</div>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <button
-            type="button"
-            onClick={reloadRemote}
-            className="p-2 rounded-xl hover:bg-slate-100/20 transition-colors"
-            title="加载 ChineseBQB 原始库"
-          >
-            {isLoading ? <Loader2 size={18} className="animate-spin" /> : <RefreshCcw size={18} />}
-          </button>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-2 rounded-xl hover:bg-slate-100/20 transition-colors"
-          >
-            <X size={18} />
-          </button>
-        </div>
+        <button type="button" onClick={onClose} className="p-2 rounded-xl hover:bg-slate-100/20 transition-colors shrink-0">
+          <X size={18} />
+        </button>
       </div>
 
-      <div className="p-4 space-y-3">
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={() => setIncludeBqb(false)}
-            className={`border rounded-full px-3 py-1.5 text-xs font-black transition-colors ${chipClass} ${!includeBqb ? activeTabClass : ''}`}
-          >
-            清爽精选
-          </button>
-          <button
-            type="button"
-            onClick={() => setIncludeBqb(true)}
-            className={`border rounded-full px-3 py-1.5 text-xs font-black transition-colors ${chipClass} ${includeBqb ? activeTabClass : ''}`}
-          >
-            BQB 原始库
-          </button>
-        </div>
-
-        <div className={`flex items-center gap-2 border rounded-2xl px-3 py-2 ${inputClass}`}>
-          <Search size={16} className="opacity-50" />
-          <input
-            value={query}
-            onChange={event => setQuery(event.target.value)}
-            placeholder="搜索：无语 / 笑死 / 问号 / 委屈 / 摸鱼..."
-            className="flex-1 bg-transparent outline-none text-sm font-bold"
-          />
-        </div>
-
-        <div className="flex gap-2 overflow-x-auto pb-1">
-          {presets.map(preset => (
-            <button
-              key={preset}
-              type="button"
-              onClick={() => setQuery(preset)}
-              className={`shrink-0 border rounded-full px-3 py-1.5 text-xs font-black transition-colors ${chipClass}`}
-            >
-              {preset}
-            </button>
-          ))}
-        </div>
+      <div className="flex items-center gap-3 px-4 pt-3 overflow-x-auto border-b border-inherit">
+        <button
+          type="button"
+          onClick={() => setActiveTab('mine')}
+          className={`shrink-0 px-4 py-3 text-sm font-black border-b-2 transition-colors ${activeTab === 'mine' ? 'border-emerald-500 text-emerald-500' : 'border-transparent opacity-60'}`}
+        >
+          我的表情
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('market')}
+          className={`shrink-0 px-4 py-3 text-sm font-black border-b-2 transition-colors ${activeTab === 'market' ? 'border-emerald-500 text-emerald-500' : 'border-transparent opacity-60'}`}
+        >
+          表情市场
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('packs')}
+          className={`shrink-0 px-4 py-3 text-sm font-black border-b-2 transition-colors ${activeTab === 'packs' ? 'border-emerald-500 text-emerald-500' : 'border-transparent opacity-60'}`}
+        >
+          套装管理
+        </button>
       </div>
 
-      <div className="px-4 pb-4 overflow-y-auto max-h-[36vh]">
-        <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-3">
-          {filtered.map(sticker => (
-            <button
-              key={sticker.id}
-              type="button"
-              onClick={() => onSelectSticker?.(sticker)}
-              title={sticker.name}
-              className={`aspect-square rounded-2xl p-1.5 transition-transform hover:scale-105 ${isDark ? 'bg-slate-900 hover:bg-slate-800' : 'bg-slate-50 hover:bg-emerald-50'}`}
-            >
-              <img
-                src={sticker.url}
-                alt={sticker.name}
-                loading="lazy"
-                className="w-full h-full object-contain rounded-xl"
-                onError={event => {
-                  event.currentTarget.style.opacity = '0.25';
-                }}
-              />
-            </button>
-          ))}
-        </div>
+      {activeTab !== 'packs' && (
+        <div className="p-4 space-y-3">
+          <div className={`flex items-center gap-2 border rounded-2xl px-3 py-2 ${inputClass}`}>
+            <Search size={16} className="opacity-50" />
+            <input
+              value={query}
+              onChange={event => setQuery(event.target.value)}
+              placeholder="搜索：笑死 / 无语 / 晚安 / 加班 / 吃瓜 / 抱抱..."
+              className="flex-1 bg-transparent outline-none text-sm font-bold"
+            />
+          </div>
 
-        {!filtered.length && (
-          <div className="py-10 text-center text-sm opacity-60 font-bold">没有找到匹配表情，换个关键词试试</div>
-        )}
-      </div>
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {presets.map(preset => (
+              <button
+                key={preset}
+                type="button"
+                onClick={() => setQuery(preset)}
+                className={`shrink-0 border rounded-full px-3 py-1.5 text-xs font-black transition-colors ${chipClass}`}
+              >
+                {preset}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'packs' ? (
+        <div className="p-4 overflow-y-auto max-h-[48vh] md:max-h-[52vh]">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {packs.map(pack => (
+              <div key={pack.id} className={`rounded-3xl border p-4 transition-colors ${packCardClass}`}>
+                <div className="flex gap-4">
+                  <div className="w-24 h-24 rounded-3xl overflow-hidden shrink-0 bg-white/70">
+                    <img src={pack.cover} alt={pack.name} className="w-full h-full object-contain" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="font-black text-base truncate">{pack.name}</h3>
+                      <span className="text-[10px] font-black px-2 py-1 rounded-full bg-emerald-50 text-emerald-600 shrink-0">{pack.count} 张</span>
+                    </div>
+                    <p className="text-xs opacity-60 font-bold mt-1 line-clamp-2">{pack.subtitle}</p>
+                    <div className="flex gap-1.5 mt-3">
+                      {pack.preview.map(sticker => (
+                        <img key={sticker.id} src={sticker.url} alt={sticker.name} className="w-10 h-10 rounded-xl object-contain bg-white/60" />
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleTogglePack(pack)}
+                      className={`mt-3 px-4 py-2 rounded-xl text-xs font-black flex items-center gap-1.5 ${pack.installed ? 'bg-slate-200 text-slate-600' : 'bg-emerald-500 text-white'}`}
+                    >
+                      <Download size={14} /> {pack.installed ? '已添加，点击移除' : '添加到我的表情'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="px-4 pb-4 overflow-y-auto max-h-[42vh] md:max-h-[45vh]">
+          {activeTab === 'market' && !query && (
+            <div className="mb-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+              {packs.slice(0, 4).map(pack => (
+                <button
+                  key={pack.id}
+                  type="button"
+                  onClick={() => setQuery(pack.theme)}
+                  className={`text-left rounded-3xl border p-3 transition-colors ${packCardClass}`}
+                >
+                  <div className="flex items-center gap-3">
+                    <img src={pack.cover} alt={pack.name} className="w-16 h-16 rounded-2xl object-contain bg-white/60" />
+                    <div className="min-w-0">
+                      <div className="font-black truncate flex items-center gap-1.5"><Sparkles size={14} className="text-emerald-500" /> {pack.name}</div>
+                      <div className="text-xs opacity-60 font-bold truncate">{pack.subtitle}</div>
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-3 md:gap-4">
+            {filtered.map(sticker => (
+              <button
+                key={sticker.id}
+                type="button"
+                onClick={() => onSelectSticker?.(sticker)}
+                title={sticker.name}
+                className={`aspect-square rounded-3xl p-1.5 transition-transform hover:scale-105 ${isDark ? 'bg-slate-900 hover:bg-slate-800' : 'bg-slate-50 hover:bg-emerald-50'}`}
+              >
+                <img
+                  src={sticker.url}
+                  alt={sticker.name}
+                  loading="lazy"
+                  className="w-full h-full object-contain rounded-2xl"
+                  onError={event => {
+                    event.currentTarget.style.opacity = '0.25';
+                  }}
+                />
+              </button>
+            ))}
+          </div>
+
+          {!filtered.length && (
+            <div className="py-10 text-center text-sm opacity-60 font-bold">没有找到匹配表情，换个关键词试试</div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
