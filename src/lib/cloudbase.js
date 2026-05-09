@@ -9,39 +9,57 @@ let sdkInitError = null;
 function withPublicShareRouting(rawDb, app) {
   if (!rawDb || !app) return rawDb;
 
-  return {
-    ...rawDb,
-    collection(name) {
-      const collectionRef = rawDb.collection(name);
-      if (name !== 'personas') return collectionRef;
+  return new Proxy(rawDb, {
+    get(target, prop, receiver) {
+      if (prop !== 'collection') {
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      }
 
-      return {
-        ...collectionRef,
-        doc(id) {
-          const docRef = collectionRef.doc(id);
-          const docId = String(id || '');
-          if (!docId.startsWith('public_')) return docRef;
+      return function collectionWithShareRouting(name) {
+        const collectionRef = target.collection(name);
+        if (name !== 'personas') return collectionRef;
 
-          return {
-            ...docRef,
-            async get() {
-              const res = await app.callFunction({
-                name: 'get_public_persona',
-                data: { shareId: docId },
-                timeout: 15000,
+        return new Proxy(collectionRef, {
+          get(collectionTarget, collectionProp, collectionReceiver) {
+            if (collectionProp !== 'doc') {
+              const value = Reflect.get(collectionTarget, collectionProp, collectionReceiver);
+              return typeof value === 'function' ? value.bind(collectionTarget) : value;
+            }
+
+            return function docWithShareRouting(id) {
+              const docRef = collectionTarget.doc(id);
+              const docId = String(id || '');
+              if (!docId.startsWith('public_')) return docRef;
+
+              return new Proxy(docRef, {
+                get(docTarget, docProp, docReceiver) {
+                  if (docProp !== 'get') {
+                    const value = Reflect.get(docTarget, docProp, docReceiver);
+                    return typeof value === 'function' ? value.bind(docTarget) : value;
+                  }
+
+                  return async function getPublicSharedPersona() {
+                    const res = await app.callFunction({
+                      name: 'get_public_persona',
+                      data: { shareId: docId },
+                      timeout: 15000,
+                    });
+
+                    if (!res.result?.success || !res.result?.persona) {
+                      throw new Error(res.result?.error || '公开人格不存在或已关闭分享');
+                    }
+
+                    return { data: [res.result.persona] };
+                  };
+                },
               });
-
-              if (!res.result?.success || !res.result?.persona) {
-                throw new Error(res.result?.error || '公开人格不存在或已关闭分享');
-              }
-
-              return { data: [res.result.persona] };
-            },
-          };
-        },
+            };
+          },
+        });
       };
     },
-  };
+  });
 }
 
 try {
