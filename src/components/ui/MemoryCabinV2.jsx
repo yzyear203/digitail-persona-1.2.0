@@ -1,7 +1,8 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { BrainCircuit, DatabaseZap, Loader2, MessageSquareX, Save, UserPen, X } from 'lucide-react';
 import { db } from '../../lib/cloudbase';
 import { upsertPersonaProfile } from '../../lib/profileStore';
+import { getDisplayRuntimeStatus, getPersonaRuntimeStatusId } from '../../lib/personaRuntimeStatus';
 
 function parseT3Content(content) {
   try {
@@ -49,7 +50,26 @@ export default function MemoryCabinV2({ activePersona, setActivePersona, showMsg
   const [isSaving, setIsSaving] = useState(false);
   const [personaName, setPersonaName] = useState(activePersona?.name || '');
   const [t3Data, setT3Data] = useState(() => parseT3Content(activePersona?.content));
+  const [runtimeStatus, setRuntimeStatus] = useState(() => getDisplayRuntimeStatus(activePersona));
   const latestPersonaRef = useRef(activePersona);
+  const personaIdForStatus = getPersonaRuntimeStatusId(activePersona);
+
+  useEffect(() => {
+    latestPersonaRef.current = activePersona;
+    setT3Data(parseT3Content(activePersona?.content));
+    setRuntimeStatus(getDisplayRuntimeStatus(activePersona));
+    setPersonaName(activePersona?.name || '');
+  }, [activePersona, personaIdForStatus]);
+
+  useEffect(() => {
+    const handleRuntimeStatusUpdate = (event) => {
+      if (!event.detail?.status) return;
+      if (event.detail?.personaId && event.detail.personaId !== personaIdForStatus) return;
+      setRuntimeStatus(event.detail.status);
+    };
+    window.addEventListener('persona-runtime-status-updated', handleRuntimeStatusUpdate);
+    return () => window.removeEventListener('persona-runtime-status-updated', handleRuntimeStatusUpdate);
+  }, [personaIdForStatus]);
 
   const refreshLocalPersona = (patch) => {
     setActivePersona(prev => {
@@ -132,7 +152,9 @@ export default function MemoryCabinV2({ activePersona, setActivePersona, showMsg
         await upsertPersonaProfile({ personaId, t3Profile: emptyT3 });
       }
       localStorage.removeItem(`hot_t1_${personaId}`);
+      localStorage.removeItem(`persona_runtime_status_${personaId}`);
       setT3Data(emptyT3);
+      setRuntimeStatus(getDisplayRuntimeStatus({ ...persona, content: nextContent }));
       refreshLocalPersona({ content: nextContent });
       showMsg('✅ 全部记忆已清空，聊天记录已保留');
     } catch (error) {
@@ -185,6 +207,16 @@ export default function MemoryCabinV2({ activePersona, setActivePersona, showMsg
               </button>
             </div>
             <p className="text-[10px] text-slate-400 leading-relaxed">保存昵称会写入 personas.name 和 personas.content.persona_name，并立即从 TCB 回读校验。</p>
+          </div>
+
+          <div className="bg-gradient-to-br from-rose-50 to-orange-50 p-5 rounded-2xl border border-rose-100 shadow-sm space-y-2">
+            <h3 className="text-xs font-black text-rose-800 flex items-center gap-1">🎭 Persona 自选状态栏</h3>
+            <div className="flex items-center gap-2">
+              <span className="px-2.5 py-1 rounded-full bg-white border border-rose-100 text-xs font-black text-rose-600">{runtimeStatus?.label || '在线'}</span>
+              <span className="text-[10px] font-black uppercase tracking-wider text-rose-400">{runtimeStatus?.color || 'green'}</span>
+            </div>
+            <p className="text-sm font-bold text-rose-900">{runtimeStatus?.activity || '等待新的聊天信号'}</p>
+            {runtimeStatus?.mood && <p className="text-[11px] text-rose-500 font-bold">情绪：{runtimeStatus.mood}</p>}
           </div>
 
           <div className="bg-gradient-to-br from-indigo-50 to-purple-50 p-5 rounded-2xl border border-indigo-100 shadow-sm">
