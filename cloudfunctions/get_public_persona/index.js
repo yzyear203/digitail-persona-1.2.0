@@ -7,6 +7,10 @@ function normalizeDoc(data) {
   return Array.isArray(data) ? data[0] : data;
 }
 
+function normalizeShareId(rawShareId) {
+  return String(rawShareId || '').trim().replace(/^public_/, '');
+}
+
 function sanitizeRuntimeProfile(rawContent, publicInfo = {}) {
   let t3 = {};
   try {
@@ -39,7 +43,7 @@ function buildSharedPersona({ shareId, publicInfo }) {
   return {
     id: `share_${shareId}`,
     sourcePersonaId: publicInfo.personaId || '',
-    shareId,
+    shareId: `public_${shareId}`,
     name: publicInfo.name || '公开数字人格',
     avatarUrl: publicInfo.avatarUrl || '',
     isSharedPersona: true,
@@ -55,7 +59,7 @@ function buildSharedPersona({ shareId, publicInfo }) {
 }
 
 exports.main = async (event = {}) => {
-  const shareId = String(event.shareId || '').trim();
+  const shareId = normalizeShareId(event.shareId);
   if (!shareId) {
     return { success: false, error: '缺少 shareId' };
   }
