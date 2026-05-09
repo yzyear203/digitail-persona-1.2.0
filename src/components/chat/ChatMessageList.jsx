@@ -87,6 +87,7 @@ export default function ChatMessageList({
 
   const selectableMessages = messages.filter(message => message.role !== 'system' && !message.isRecalled && !message.isAnimated && !message.isDeletedForUser);
   const selectedCount = selectedIds.length;
+  const selectedUserCount = messages.filter(message => selectedIds.includes(message.id) && message.role === 'user').length;
 
   const clearSelection = () => {
     setSelectedIds([]);
@@ -110,7 +111,7 @@ export default function ChatMessageList({
     if (!text) return;
 
     const menuWidth = 168;
-    const menuHeight = 150;
+    const menuHeight = message.role === 'user' ? 150 : 120;
     const x = Math.min(xPoint, window.innerWidth - menuWidth - 12);
     const y = Math.min(yPoint, window.innerHeight - menuHeight - 12);
 
@@ -155,7 +156,11 @@ export default function ChatMessageList({
 
   const recallMessageIds = ids => {
     const idSet = new Set(ids);
-    setMessages(prev => prev.map(msg => idSet.has(msg.id) ? { ...msg, isAnimated: false, isRecalled: true } : msg));
+    setMessages(prev => prev.map(msg => (
+      idSet.has(msg.id) && msg.role === 'user'
+        ? { ...msg, isAnimated: false, isRecalled: true }
+        : msg
+    )));
   };
 
   const deleteMessageIdsForUser = ids => {
@@ -164,7 +169,7 @@ export default function ChatMessageList({
   };
 
   const handleRecall = () => {
-    if (!contextMenu?.message) return;
+    if (!contextMenu?.message || contextMenu.message.role !== 'user') return;
     recallMessageIds([contextMenu.message.id]);
     setContextMenu(null);
   };
@@ -176,7 +181,7 @@ export default function ChatMessageList({
   };
 
   const handleMultiRecall = () => {
-    if (!selectedIds.length) return;
+    if (!selectedUserCount) return;
     recallMessageIds(selectedIds);
     clearSelection();
   };
@@ -204,8 +209,8 @@ export default function ChatMessageList({
               <button type="button" onClick={handleMultiDelete} disabled={!selectedCount} className="px-3 py-2 rounded-xl bg-amber-50 text-amber-600 text-xs font-black flex items-center gap-1 disabled:opacity-40">
                 <Trash2 size={14} /> 删除
               </button>
-              <button type="button" onClick={handleMultiRecall} disabled={!selectedCount} className="px-3 py-2 rounded-xl bg-red-50 text-red-600 text-xs font-black flex items-center gap-1 disabled:opacity-40">
-                <RotateCcw size={14} /> 撤回
+              <button type="button" onClick={handleMultiRecall} disabled={!selectedUserCount} className="px-3 py-2 rounded-xl bg-red-50 text-red-600 text-xs font-black flex items-center gap-1 disabled:opacity-40">
+                <RotateCcw size={14} /> 撤回我方{selectedUserCount ? ` ${selectedUserCount}` : ''}
               </button>
               <button type="button" onClick={clearSelection} className="px-3 py-2 rounded-xl bg-slate-100 text-slate-600 text-xs font-black flex items-center gap-1">
                 <X size={14} /> 取消
@@ -257,7 +262,7 @@ export default function ChatMessageList({
             {m.isRecalled ? (
               <div className="flex justify-center my-4">
                 <span className={`text-xs font-medium px-3 py-1 rounded-md ${recallClass}`}>
-                  {isUser ? '你' : '"对方"'} 撤回了一条消息
+                  你撤回了一条消息
                 </span>
               </div>
             ) : (
@@ -366,13 +371,15 @@ export default function ChatMessageList({
           >
             <Trash2 size={15} /> 删除
           </button>
-          <button
-            type="button"
-            onClick={handleRecall}
-            className="w-full px-3 py-2.5 rounded-xl text-sm font-black flex items-center gap-2 hover:bg-red-50 hover:text-red-600 transition-colors"
-          >
-            <RotateCcw size={15} /> 撤回
-          </button>
+          {contextMenu.message.role === 'user' && (
+            <button
+              type="button"
+              onClick={handleRecall}
+              className="w-full px-3 py-2.5 rounded-xl text-sm font-black flex items-center gap-2 hover:bg-red-50 hover:text-red-600 transition-colors"
+            >
+              <RotateCcw size={15} /> 撤回
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setContextMenu(null)}
