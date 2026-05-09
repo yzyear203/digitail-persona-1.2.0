@@ -14,22 +14,19 @@ function Avatar({ src, label, isUser, isDark }) {
   );
 }
 
-function StickerBubble({ sticker, isUser, isDark }) {
-  const label = sticker?.name || '表情包';
+function StickerBubble({ sticker }) {
+  const label = sticker?.name || sticker?.emotion || '表情包';
   return (
-    <div className={`max-w-[46%] rounded-2xl p-2 shadow-sm ${isDark ? 'bg-slate-900/40' : 'bg-white/65'}`} title={label}>
+    <div className="max-w-[46%] select-none" title={label}>
       <img
         src={sticker?.url}
         alt={label}
         loading="lazy"
-        className="max-w-[138px] md:max-w-[168px] max-h-[138px] md:max-h-[168px] object-contain rounded-xl"
+        className="max-w-[148px] md:max-w-[178px] max-h-[148px] md:max-h-[178px] object-contain drop-shadow-sm"
         onError={event => {
           event.currentTarget.style.display = 'none';
         }}
       />
-      <div className={`mt-1 text-[10px] font-bold truncate text-center ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-        {isUser ? '我方表情' : 'Persona 表情'} · {sticker?.emotion || sticker?.name || 'BQB'}
-      </div>
     </div>
   );
 }
@@ -289,7 +286,7 @@ export default function ChatMessageList({
                     onTouchCancel={cancelLongPress}
                     className="cursor-default select-none"
                   >
-                    <StickerBubble sticker={m.sticker} isUser={isUser} isDark={isDark} />
+                    <StickerBubble sticker={m.sticker} />
                   </div>
                 ) : (
                   <div
