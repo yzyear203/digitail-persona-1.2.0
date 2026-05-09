@@ -32,6 +32,43 @@ function stripJsonFence(text) {
   return String(text || '').replace(/```json|```/g, '').trim();
 }
 
+function compactRuntimeText(text, maxChars = 900) {
+  const source = String(text || '').replace(/\s+/g, ' ').trim();
+  if (source.length <= maxChars) return source;
+  const head = source.slice(0, Math.floor(maxChars * 0.7));
+  const tail = source.slice(-Math.floor(maxChars * 0.2));
+  return `${head} …… ${tail}`;
+}
+
+function normalizePersonaContent(rawText) {
+  const persona = JSON.parse(stripJsonFence(rawText));
+  const nowISO = new Date().toISOString();
+
+  if (!persona.runtime_card?.value) {
+    const fullPersonality = persona.personality?.value || '';
+    const quoteTriggers = persona.interaction_style?.quote_triggers || [];
+    const recallTriggers = persona.interaction_style?.recall_triggers || [];
+    const topInterests = Array.isArray(persona.interests)
+      ? persona.interests.slice(0, 3).map(item => item.topic).filter(Boolean).join('、')
+      : '';
+
+    persona.runtime_card = {
+      value: [
+        compactRuntimeText(fullPersonality, 620),
+        topInterests ? `兴趣/关注点：${topInterests}` : '',
+        quoteTriggers.length ? `引用触发：${quoteTriggers.slice(0, 3).join('；')}` : '',
+        recallTriggers.length ? `撤回触发：${recallTriggers.slice(0, 3).join('；')}` : '',
+        '输出节奏：自然口语化，超过两句话必须用 ||| 分气泡；可在强情绪、吐槽、安慰时使用 [sticker:关键词]。'
+      ].filter(Boolean).join('\n'),
+      confidence: persona.personality?.confidence || 'high',
+      last_updated: nowISO,
+      source_event_ids: []
+    };
+  }
+
+  return JSON.stringify(persona);
+}
+
 function isRetryableDeepSeekError(error) {
   return /network request error|timeout|timed out|Service is too busy|busy|overloaded|503|429/i.test(String(error?.message || error || ''));
 }
@@ -46,7 +83,9 @@ function buildDistillationPrompt(material) {
 要求：
 1. 必须用第一人称“我”写 personality.value，结合原文例子，禁止泛泛而谈。
 2. 输出必须是合法 JSON，不要 markdown，不要解释。
-3. personality.value 必须包含以下模块：
+3. personality.value 是完整侧写，用于状态舱展示和未来编辑，可以详细。
+4. runtime_card.value 是运行时人格卡，用于每轮聊天 prompt，必须压缩到 500~800 中文字，保留最影响说话方式的规则，禁止写成泛泛总结。
+5. personality.value 必须包含以下模块：
 【一、打字节奏】速度快/中/慢；一次性连发条数范围；补发习惯和触发条件。
 【二、语言风格与社交面具】口头禅至少3个；收尾方式；标点习惯；打错字处理；试图维持的人设。
 【三、情绪表达与触发器】开心/不满表达方式；会激怒或冷处理的话题。
@@ -54,6 +93,14 @@ function buildDistillationPrompt(material) {
 【五、时间与潜意识泄露】对“对方没回”的处理；用 <del>本来准备发出的具体文字</del> 表现打了又删的内容。
 【六、引用与撤回触发条件】根据人格选择 2 到 3 个 quote_triggers，2 到 3 个 recall_triggers，不要套模板。
 【最终系统执行指令】包括：使用 ||| 分气泡；触发时使用微观操控策略；禁止动作描写；用 <del> 展示犹豫；命中引用触发时用 [quote:对方原话短片段]；命中撤回触发时用 <recall>发出后后悔的原消息</recall>。
+
+runtime_card.value 必须包含：
+- 一句话身份/人设内核
+- 说话节奏和气泡拆分习惯
+- 口头禅/标点/语气
+- 亲密关系中的回应方式
+- 引用/撤回/表情包的触发偏好
+- 禁止动作描写、禁止过度解释
 
 引用触发条件参考：
 - 对方一条消息说了好几件事，需要挑一句回应。
@@ -74,6 +121,7 @@ function buildDistillationPrompt(material) {
 {
   "identity": { "value": "根据聊天推断的客观身份，若无填空", "confidence": "high" },
   "personality": { "value": "完整第一人称心理侧写与最终系统执行指令", "confidence": "high" },
+  "runtime_card": { "value": "500~800字运行时人格卡，只保留每轮聊天必须注入的说话规则", "confidence": "high", "last_updated": "${nowISO}" },
   "interests": [ { "topic": "爱好或关注点", "weight": 8, "confidence": "high" } ],
   "relationship": { "archetype": "朋友", "intimacy_level": 5, "last_chat_time": "${nowISO}", "bond_momentum": "stable" },
   "current_context": { "value": "用户目前的精神状态或正在忙的事", "expires_at": "${expiresAt}" },
@@ -82,6 +130,10 @@ function buildDistillationPrompt(material) {
     "quote_triggers": ["具体人格化引用触发条件1", "具体人格化引用触发条件2"],
     "recall_tendency": "low/medium/high",
     "recall_triggers": ["具体人格化撤回触发条件1", "具体人格化撤回触发条件2"]
+  },
+  "sticker_style": {
+    "use_tendency": "low/medium/high",
+    "trigger_rules": ["这个人格什么时候适合发 [sticker:无语] / [sticker:笑死] / [sticker:安慰] 等"]
   }
 }
 
@@ -237,16 +289,16 @@ B: [说话内容]
         responseText = await callDeepSeekAPI(prompt, systemPrompt, 'flash');
       }
 
-      const personaContent = stripJsonFence(responseText);
+      let personaContent = '';
       try {
-        JSON.parse(personaContent);
+        personaContent = normalizePersonaContent(responseText);
       } catch (parseError) {
         throw new Error(`侧写结果不是合法 JSON：${parseError.message}`);
       }
 
       // ================= 阶段三：收尾刻录 =================
       setDistillProgress(90);
-      setDistillLogs(prev => [...prev, '[成功] DeepSeek 推演完毕。']);
+      setDistillLogs(prev => [...prev, '[成功] DeepSeek 推演完毕，已生成完整侧写与运行时人格卡。']);
       setDistillLogs(prev => [...prev, '[刻录] 正在将档案同步至云端数据库...']);
 
       const newPersona = {
