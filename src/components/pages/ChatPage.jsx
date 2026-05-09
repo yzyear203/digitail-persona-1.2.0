@@ -3,7 +3,7 @@ import ChatHeader from '../chat/ChatHeader';
 import ChatMessageList from '../chat/ChatMessageList';
 import ChatInput from '../chat/ChatInput';
 import TasksModal from '../ui/TasksModal';
-import MemoryCabin from '../ui/MemoryCabin';
+import MemoryCabin from '../ui/MemoryCabinV2';
 import ChatAppearanceModal from '../ui/ChatAppearanceModal';
 import StickerPanel from '../stickers/StickerPanel';
 import { callDoubaoAPI, callDeepSeekAPI } from '../../lib/api';
@@ -528,7 +528,6 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
         await upsertPersonaProfile({
           personaId,
           t3Profile: nextT3,
-          nickname: activePersonaRef.current?.name,
         });
       } catch (error) {
         console.warn('用户称呼同步云端失败:', error);
