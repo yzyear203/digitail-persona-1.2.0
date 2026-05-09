@@ -86,49 +86,22 @@ export function buildPublicPersonaSnapshot({ persona, userProfile, user }) {
   const personaId = String(persona?.id || persona?._id || '').trim();
   const creatorUid = String(persona?.uid || user?.uid || userProfile?.uid || '').trim();
   const name = compactText(persona?.name || t3.persona_name || '未命名数字人格', 30);
+  const intro = pickIntro(t3, name);
+  const publicInfo = { name, intro };
 
   return {
     personaId,
     creatorUid,
     name,
-    intro: pickIntro(t3, name),
+    intro,
     tags: pickTags(t3),
     sampleLines: pickSampleLines(t3),
     avatarUrl: persona?.avatarUrl || t3.avatarUrl || '',
     creatorNickname: userProfile?.nickname || '匿名创作者',
+    content: JSON.stringify(buildSanitizedRuntimeProfile(t3, publicInfo)),
     isPublic: true,
     updatedAt: Date.now(),
   };
-}
-
-async function upsertPublicPersonaCopy({ persona, snapshot, sharePersonaId }) {
-  const t3 = safeJsonParse(persona?.content);
-  const runtimeProfile = buildSanitizedRuntimeProfile(t3, snapshot);
-  const publicCopy = {
-    uid: 'public_share',
-    name: snapshot.name,
-    avatarUrl: snapshot.avatarUrl || '',
-    content: JSON.stringify(runtimeProfile),
-    isPublicShare: true,
-    sourcePersonaId: snapshot.personaId,
-    creatorUid: snapshot.creatorUid,
-    publicIntro: snapshot.intro,
-    publicTags: snapshot.tags,
-    publicSampleLines: snapshot.sampleLines,
-    creatorNickname: snapshot.creatorNickname,
-    createdAt: persona?.createdAt || Date.now(),
-    updatedAt: Date.now(),
-  };
-
-  if (sharePersonaId) {
-    await db.collection('personas').doc(sharePersonaId).update(publicCopy);
-    return sharePersonaId;
-  }
-
-  const addRes = await db.collection('personas').add(publicCopy);
-  const id = addRes.id || addRes._id;
-  if (!id) throw new Error('公开人格副本创建成功，但未拿到 shareId');
-  return id;
 }
 
 export async function ensurePublicPersona({ persona, userProfile, user }) {
@@ -144,28 +117,19 @@ export async function ensurePublicPersona({ persona, userProfile, user }) {
     .get();
 
   const existing = existingRes.data?.[0];
-  const sharePersonaId = await upsertPublicPersonaCopy({
-    persona,
-    snapshot,
-    sharePersonaId: existing?.sharePersonaId,
-  });
-
-  const publicRecord = {
-    ...snapshot,
-    sharePersonaId,
-  };
-
   if (existing?._id) {
-    await db.collection('public_personas').doc(existing._id).update(publicRecord);
-    return { ...existing, ...publicRecord, id: sharePersonaId, publicPersonaId: existing._id };
+    await db.collection('public_personas').doc(existing._id).update(snapshot);
+    return { ...existing, ...snapshot, id: existing._id };
   }
 
   const addRes = await db.collection('public_personas').add({
-    ...publicRecord,
+    ...snapshot,
     createdAt: Date.now(),
   });
 
-  return { ...publicRecord, id: sharePersonaId, publicPersonaId: addRes.id || addRes._id };
+  const id = addRes.id || addRes._id;
+  if (!id) throw new Error('公开分享创建成功，但未拿到 shareId');
+  return { ...snapshot, id };
 }
 
 export async function fetchSharedPersonaByShareId(shareId) {
@@ -182,5 +146,5 @@ export async function fetchSharedPersonaByShareId(shareId) {
     throw new Error(result.error || '公开人格不存在或已关闭分享');
   }
 
-  return result;
+  return result.persona;
 }
