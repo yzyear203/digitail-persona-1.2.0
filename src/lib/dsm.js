@@ -24,6 +24,14 @@ export const DEFAULT_T3_PROFILE = {
         recall_tendency: "low",
         recall_triggers: [],
     },
+    sticker_style: {
+        use_tendency: "medium",
+        trigger_rules: [
+            "强烈无语、震惊、想吐槽时可以发 [sticker:无语] 或 [sticker:震惊]",
+            "调侃、憋笑、熟人感很强时可以发 [sticker:笑死]",
+            "想安慰、缓和语气、卖乖时可以发 [sticker:安慰]"
+        ],
+    },
     forbidden_topics: [],
     pending_conflicts: []
 };
@@ -75,6 +83,27 @@ function formatInteractionStyleBlock(t3) {
     block += `- 命中引用触发条件时，优先在对应气泡开头使用 [quote:对方原话短片段]。\n`;
     block += `- 命中撤回触发条件时，可以使用 <recall>发出后后悔的原消息</recall>。\n`;
     block += `- 引用是注意力落点，撤回是情绪反应；不要为了展示功能而机械使用。\n`;
+
+    return block;
+}
+
+function formatStickerStyleBlock(t3) {
+    const style = t3?.sticker_style || DEFAULT_T3_PROFILE.sticker_style;
+    const rules = normalizeTriggerList(style.trigger_rules, 5);
+    const tendency = style.use_tendency || 'medium';
+
+    let block = `【表情包系统】\n`;
+    block += `你可以像微信聊天一样发送表情包。\n`;
+    block += `发送格式必须单独写成一个气泡：[sticker:关键词]。\n`;
+    block += `可用关键词包括：无语、震惊、笑死、开心、安慰、生气、害羞、崩溃、疑惑、嘲讽、摸鱼、可爱。\n`;
+    block += `表情倾向：${tendency}\n`;
+    if (rules.length > 0) {
+        block += `容易使用表情包的触发条件：\n${rules.map(rule => `- ${rule}`).join('\n')}\n`;
+    }
+    block += `使用要求：\n`;
+    block += `- 表情包必须作为独立气泡出现，例如：文字|||[sticker:无语]|||文字。\n`;
+    block += `- 不要解释图片内容，也不要把 [sticker:关键词] 写进普通句子里。\n`;
+    block += `- 表情包用于强情绪、调侃、安慰、无语、熟人感场景；不要每轮都用。\n`;
 
     return block;
 }
@@ -247,6 +276,8 @@ export function buildSystemPrompt(activePersona, hotT1, isCooling, daysSinceLast
 
     const interactionStyleBlock = formatInteractionStyleBlock(t3);
     if (interactionStyleBlock) prompt += interactionStyleBlock + "\n\n";
+
+    prompt += formatStickerStyleBlock(t3) + "\n\n";
 
     if (hotT1 && hotT1.length > 0) {
         prompt += "[近期事件]\n" + hotT1.map(item => `- [${new Date(item.timestamp).toISOString().split('T')[0]}] ${item.summary}`).join('\n') + "\n\n";
