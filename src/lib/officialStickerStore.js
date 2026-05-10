@@ -1,4 +1,5 @@
 import { OFFICIAL_STICKER_CATALOG, OFFICIAL_STICKER_SHEETS, getOfficialStickerKeywordPresets } from './officialStickerCatalog';
+import { OFFICIAL_STICKER_SHEET_IMAGES } from './officialStickerAssets';
 
 const CACHE_KEY = 'digitail_official_sticker_market_v2';
 const SHEET_META = Object.fromEntries(OFFICIAL_STICKER_SHEETS.map(sheet => [sheet.id, sheet]));
@@ -24,6 +25,7 @@ function createOfficialPlaceholderSvgDataUrl(sticker) {
 
 function normalizeSticker(sticker, index) {
   const sheet = SHEET_META[sticker.sheet] || {};
+  const sheetUrl = OFFICIAL_STICKER_SHEET_IMAGES[sticker.sheet] || '';
   const tags = Array.from(new Set([
     sticker.name,
     sticker.emotion,
@@ -37,6 +39,7 @@ function normalizeSticker(sticker, index) {
     packId: sticker.sheet,
     sheet: sticker.sheet,
     sheetName: sheet.name || '官方表情包',
+    sheetUrl,
     row: sticker.row,
     col: sticker.col,
     rows: sheet.rows,
@@ -51,7 +54,8 @@ function normalizeSticker(sticker, index) {
     meaning: sticker.meaning,
     aliases: sticker.aliases || [],
     url: sticker.url || createOfficialPlaceholderSvgDataUrl(sticker),
-    rawUrl: '',
+    rawUrl: sheetUrl,
+    isSprite: Boolean(sheetUrl),
     isCurated: true,
     isAnimated: false,
     text: sticker.emotion,
