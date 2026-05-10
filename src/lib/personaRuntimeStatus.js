@@ -1,4 +1,5 @@
 const RUNTIME_STATUS_STORAGE_PREFIX = 'persona_runtime_status_';
+const EMOTION_ACCUMULATOR_STORAGE_PREFIX = 'persona_emotion_accumulator_';
 
 const COLOR_ALIASES = {
   red: 'red',
@@ -36,6 +37,8 @@ const COLOR_ALIASES = {
 const DEFAULT_STATUS_TTL_MINUTES = 45;
 const MIN_STATUS_TTL_MINUTES = 5;
 const MAX_STATUS_TTL_MINUTES = 8 * 60;
+const DISPLAY_MOOD_STREAK_THRESHOLD = 4;
+const BASE_MOOD_STREAK_THRESHOLD = 8;
 const STATUS_MARKER_REGEX = /\[status:\s*(\{[\s\S]*?\})\]/gi;
 
 function compactText(value, maxChars) {
@@ -44,6 +47,10 @@ function compactText(value, maxChars) {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, maxChars);
+}
+
+function normalizeMood(value, fallback = '') {
+  return compactText(value || fallback || '', 12) || '平稳';
 }
 
 function normalizeColor(value) {
@@ -126,6 +133,90 @@ function buildExpiresAt(source, durationMinutes, now) {
   return new Date(now + durationMinutes * 60 * 1000).toISOString();
 }
 
+function getEmotionAccumulatorKey(personaId) {
+  return `${EMOTION_ACCUMULATOR_STORAGE_PREFIX}${personaId}`;
+}
+
+function readEmotionAccumulator(personaId) {
+  if (typeof localStorage === 'undefined' || !personaId) return {};
+  try {
+    return JSON.parse(localStorage.getItem(getEmotionAccumulatorKey(personaId)) || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function saveEmotionAccumulator(personaId, accumulator) {
+  if (typeof localStorage === 'undefined' || !personaId) return;
+  try {
+    localStorage.setItem(getEmotionAccumulatorKey(personaId), JSON.stringify(accumulator));
+  } catch (error) {
+    console.warn('保存 Persona 情绪累积器失败:', error);
+  }
+}
+
+function buildNextEmotionAccumulator(previous = {}, incomingMood) {
+  const mood = normalizeMood(incomingMood, previous.last_mood || '平稳');
+  const sameMood = previous.last_mood === mood;
+  const streak = sameMood ? Number(previous.streak || 0) + 1 : 1;
+  return {
+    last_mood: mood,
+    streak,
+    updated_at: new Date().toISOString(),
+  };
+}
+
+function mergeBaseMood(previousBaseMood, incomingMood) {
+  const baseMood = normalizeMood(previousBaseMood, '平稳');
+  const mood = normalizeMood(incomingMood, baseMood);
+  if (!baseMood || baseMood === '未定' || baseMood === '平稳') return mood;
+  if (baseMood === mood || baseMood.includes(mood)) return baseMood;
+  if (baseMood.length <= 2 && mood.length <= 2) return compactText(`又${baseMood}又${mood}`, 12);
+  return compactText(`${baseMood}但${mood}`, 12);
+}
+
+function isEmptyOrFallbackStatus(status) {
+  return !status || status.source === 'fallback' || !status.expires_at;
+}
+
+function buildDisplayedStatus({ previousStatus, incomingStatus, accumulator }) {
+  const previous = previousStatus || {};
+  const incoming = incomingStatus || {};
+  const shouldChangeDisplay = isEmptyOrFallbackStatus(previous)
+    || isRawStatusExpired(previous)
+    || accumulator.streak >= DISPLAY_MOOD_STREAK_THRESHOLD;
+
+  const baseMood = accumulator.streak >= BASE_MOOD_STREAK_THRESHOLD
+    ? mergeBaseMood(previous.base_mood || incoming.base_mood, incoming.chat_mood)
+    : (previous.base_mood || incoming.base_mood || incoming.chat_mood || '平稳');
+
+  if (shouldChangeDisplay) {
+    return {
+      ...incoming,
+      base_mood: baseMood,
+      chat_mood: incoming.chat_mood,
+      mood: incoming.chat_mood,
+      emotional_shift: incoming.emotional_shift,
+      emotion_streak: accumulator.streak,
+      emotion_display_threshold: DISPLAY_MOOD_STREAK_THRESHOLD,
+      emotion_base_threshold: BASE_MOOD_STREAK_THRESHOLD,
+      last_observed_mood: incoming.chat_mood,
+      updated_at: new Date().toISOString(),
+    };
+  }
+
+  return {
+    ...previous,
+    base_mood: baseMood,
+    last_observed_mood: incoming.chat_mood,
+    emotion_streak: accumulator.streak,
+    emotion_display_threshold: DISPLAY_MOOD_STREAK_THRESHOLD,
+    emotion_base_threshold: BASE_MOOD_STREAK_THRESHOLD,
+    pending_emotional_shift: incoming.emotional_shift,
+    updated_at: previous.updated_at || new Date().toISOString(),
+  };
+}
+
 export function getPersonaRuntimeStatusId(persona) {
   return String(persona?._id || persona?.id || '').trim();
 }
@@ -147,9 +238,9 @@ export function normalizeRuntimeStatus(status = {}, fallback = {}) {
   const durationMinutes = resolveDurationMinutes(source, fallback);
   const label = compactText(source.label || source.state || source.activity_label || fallback.label || '在线', 8) || '在线';
   const activity = compactText(source.activity || source.value || fallback.activity || '', 56);
-  const mood = compactText(source.mood || source.chat_mood || source.current_mood || fallback.mood || '', 12);
-  const baseMood = compactText(source.base_mood || source.baseMood || source.temperament_mood || fallback.base_mood || fallback.baseMood || mood || '平稳', 12);
-  const chatMood = compactText(source.chat_mood || source.chatMood || source.current_mood || source.reactive_mood || fallback.chat_mood || fallback.chatMood || mood || baseMood, 12);
+  const mood = normalizeMood(source.mood || source.chat_mood || source.current_mood || fallback.mood || '', fallback.chat_mood || fallback.base_mood || '平稳');
+  const baseMood = normalizeMood(source.base_mood || source.baseMood || source.temperament_mood || fallback.base_mood || fallback.baseMood || mood, mood);
+  const chatMood = normalizeMood(source.chat_mood || source.chatMood || source.current_mood || source.reactive_mood || fallback.chat_mood || fallback.chatMood || mood, baseMood);
   const emotionalShift = compactText(source.emotional_shift || source.emotionalShift || fallback.emotional_shift || fallback.emotionalShift || '', 24);
   const expiresAt = buildExpiresAt(source, durationMinutes, now);
 
@@ -193,25 +284,31 @@ export function readRuntimeStatus(personaId) {
 }
 
 export function shouldRefreshRuntimeStatus(personaId) {
-  // 状态闹钟不再只按 TTL 刷新；每轮正常聊天都允许模型重新判断“当前聊天情绪”，
-  // 这样 Persona 可以保留基础气质，同时随用户情绪发生轻微变化。
+  // 每轮对话都让模型返回“本轮观察到的当前情绪”，但前端不会每轮改展示。
+  // 展示变化由 emotion accumulator 控制：同类情绪连续 4 次才改当前状态，连续 8 次才影响基础情绪。
   return Boolean(personaId);
 }
 
 export function persistRuntimeStatus(personaId, status) {
   if (typeof localStorage === 'undefined' || !personaId || !status) return null;
-  const normalized = normalizeRuntimeStatus(status, readRuntimeStatus(personaId) || {});
+  const previousStatus = readRuntimeStatus(personaId) || getDisplayRuntimeStatus(null);
+  const incomingStatus = normalizeRuntimeStatus(status, previousStatus || {});
+  const accumulator = buildNextEmotionAccumulator(readEmotionAccumulator(personaId), incomingStatus.chat_mood);
+  const displayedStatus = buildDisplayedStatus({ previousStatus, incomingStatus, accumulator });
+
+  saveEmotionAccumulator(personaId, accumulator);
+
   try {
-    localStorage.setItem(`${RUNTIME_STATUS_STORAGE_PREFIX}${personaId}`, JSON.stringify(normalized));
+    localStorage.setItem(`${RUNTIME_STATUS_STORAGE_PREFIX}${personaId}`, JSON.stringify(displayedStatus));
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('persona-runtime-status-updated', {
-        detail: { personaId, status: normalized },
+        detail: { personaId, status: displayedStatus, accumulator },
       }));
     }
   } catch (error) {
     console.warn('保存 Persona 运行状态失败:', error);
   }
-  return normalized;
+  return displayedStatus;
 }
 
 export function extractAndPersistRuntimeStatusMarkers(text) {
