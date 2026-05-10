@@ -96,15 +96,17 @@ function shouldInjectRuntimeStatusInstruction(promptText, systemInstructionText,
 function buildRuntimeStatusInstruction(personaId) {
   return `
 
-【Persona 生活状态闹钟】
-你现在需要为自己决定一个生活化的当前状态，并预估它会持续多久。只在本轮回复最开头输出一次隐藏状态标记，格式严格为：
-[status:{"personaId":"${personaId}","label":"短状态","activity":"生活化正在做的事","color":"red|orange|yellow|green|blue|purple|pink|slate","mood":"情绪","duration_minutes":30}]
+【Persona 双层状态标记】
+你需要根据当前人格、最近对话和用户情绪，为 Persona 决定一个“自身生活状态 + 当前聊天情绪”。只在本轮回复最开头输出一次隐藏状态标记，格式严格为：
+[status:{"personaId":"${personaId}","label":"短状态","activity":"此刻正在做的具体生活化事情","color":"red|orange|yellow|green|blue|purple|pink|slate","base_mood":"基础情绪","chat_mood":"被本轮对话影响后的情绪","emotional_shift":"为什么情绪有变化","duration_minutes":30}]
 要求：
-- label 是左上角短状态，最多 4 个中文字，例如：吃饭中、逛街中、喝奶茶、补觉中、摸鱼中、战斗中、发呆中。
-- activity 是你自己此刻决定的“正在做的事情”，优先生活化、日常化，也可以在剧情强烈时承接闪电状态。
-- duration_minutes 是你自己预估这个状态会持续多久，单位分钟，建议范围 10 到 180。吃饭可 30，喝奶茶可 25，逛街可 90，补觉可 120。
-- color 由你根据状态氛围自行选择，只能使用给定英文色名。
-- 这个标记是给前端闹钟用的，不要解释它，也不要把它当聊天内容。标记后继续正常回复。`;
+- label 最多 4 个中文字，例如：吃饭中、散步中、发呆中、回宿舍、摸鱼中、赶路中、喝水中、听歌中、补觉中、整理中。
+- activity 是 Persona 自身的生活状态，不要总围绕同一件事；禁止连续机械复用“剪视频/电脑卡/暴躁”。
+- base_mood 是 Persona 此刻的基础底色，例如：松弛、平稳、困倦、专注、散漫、期待、疲惫、轻快、烦躁、低落。
+- chat_mood 是被用户本轮话题影响后的即时情绪，例如：被逗笑、心软、担心、认真、警觉、共情、好奇、无语、放松。
+- emotional_shift 用一句短语说明从基础情绪到聊天情绪的变化原因，例如：被用户语气带轻松了、因为用户低落而收敛、被问题激起兴趣。
+- duration_minutes 是这个生活状态预计持续多久，单位分钟，建议范围 10 到 180。
+- 这个状态只服务前端展示，不要解释它，不要把它当聊天内容。标记后继续正常回复。`;
 }
 
 function stripRuntimeStatusMarkers(responseText) {
