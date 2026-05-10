@@ -225,11 +225,11 @@ export default function MemoryCabinV2({ activePersona, setActivePersona, showMsg
 
           <div className="bg-gradient-to-br from-rose-50 to-orange-50 p-5 rounded-2xl border border-rose-100 shadow-sm space-y-3">
             <h3 className="text-xs font-black text-rose-800 flex items-center gap-1">🎭 Persona 生活状态闹钟</h3>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="px-2.5 py-1 rounded-full bg-white border border-rose-100 text-xs font-black text-rose-600">{runtimeStatus?.label || '待唤醒'}</span>
               <span className="text-[10px] font-black uppercase tracking-wider text-rose-400">{runtimeStatus?.color || 'slate'}</span>
             </div>
-            <p className="text-sm font-bold text-rose-900">{runtimeStatus?.activity || '闹钟已就绪，下一次聊天时更新状态'}</p>
+            <p className="text-sm font-bold text-rose-900">{runtimeStatus?.activity || '下一次聊天时更新 TA 的生活状态和当前情绪'}</p>
             <div className="grid grid-cols-2 gap-2 text-[11px] font-bold text-rose-500">
               <div className="bg-white/70 rounded-xl px-3 py-2 border border-rose-100 flex items-center gap-1">
                 <Clock3 size={13} /> 唤醒：{formatWakeTime(runtimeStatus)}
@@ -238,16 +238,17 @@ export default function MemoryCabinV2({ activePersona, setActivePersona, showMsg
                 剩余：{formatRuntimeStatusRemaining(runtimeStatus)}
               </div>
             </div>
-            <div className="text-[11px] text-rose-400 font-bold">
-              预估时长：{runtimeStatus?.duration_minutes || 45} 分钟{runtimeStatus?.mood ? ` · 情绪：${runtimeStatus.mood}` : ''}
+            <div className="grid grid-cols-2 gap-2 text-[11px] font-bold text-rose-500">
+              <div className="bg-white/60 rounded-xl px-3 py-2 border border-rose-100">基础：{runtimeStatus?.base_mood || '未定'}</div>
+              <div className="bg-white/60 rounded-xl px-3 py-2 border border-rose-100">当前：{runtimeStatus?.chat_mood || runtimeStatus?.mood || '未定'}</div>
             </div>
-            <p className="text-[10px] text-rose-400 leading-relaxed">到点后不会后台自动请求模型；下一次正常聊天会唤醒 Persona 重新决定状态，左上角随之改变。</p>
-          </div>
-
-          <div className="bg-gradient-to-br from-indigo-50 to-purple-50 p-5 rounded-2xl border border-indigo-100 shadow-sm">
-            <h3 className="text-xs font-black text-indigo-800 mb-3 flex items-center gap-1">⚡ 闪电状态 (当前上下文)</h3>
-            <p className="text-sm font-bold text-indigo-900">{t3Data.current_context?.value || '静默期，无紧急事态'}</p>
-            {t3Data.current_context?.expires_at && <p className="text-[10px] text-indigo-400 mt-2 font-mono">TTL: {new Date(t3Data.current_context.expires_at).toLocaleString()} 后过期销毁</p>}
+            {runtimeStatus?.emotional_shift && (
+              <p className="text-[11px] text-rose-500 font-bold">变化：{runtimeStatus.emotional_shift}</p>
+            )}
+            <div className="text-[11px] text-rose-400 font-bold">
+              预估时长：{runtimeStatus?.duration_minutes || 0} 分钟
+            </div>
+            <p className="text-[10px] text-rose-400 leading-relaxed">生活状态是 TA 自身正在做的事；当前情绪会随着你们的聊天语气发生轻微变化。</p>
           </div>
 
           <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
