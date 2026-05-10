@@ -1,4 +1,4 @@
-import { findStickerByKeyword } from './stickerStore';
+import { findStickerByKeyword } from './officialStickerStore';
 
 const STICKER_MARKER_REGEX = /^\s*\[sticker\s*:\s*([^\]]+?)\s*\]\s*$/i;
 const INLINE_STICKER_REGEX = /\[sticker\s*:\s*([^\]]+?)\s*\]/gi;
