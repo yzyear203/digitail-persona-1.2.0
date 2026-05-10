@@ -8,7 +8,7 @@ import {
   removeStickerPack,
   searchMarketStickers,
   searchStickersSync,
-} from '../../lib/stickerStore';
+} from '../../lib/officialStickerStore';
 
 export default function StickerPanel({ isOpen, onClose, onSelectSticker, chatAppearance }) {
   const [query, setQuery] = useState('');
@@ -40,9 +40,6 @@ export default function StickerPanel({ isOpen, onClose, onSelectSticker, chatApp
   const chipClass = isDark
     ? 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-700'
     : 'bg-slate-50 hover:bg-emerald-50 text-slate-600 border-slate-200';
-  const activeTabClass = isDark
-    ? 'bg-emerald-500/15 border-emerald-400 text-emerald-300'
-    : 'bg-emerald-50 border-emerald-300 text-emerald-700';
   const packCardClass = isDark
     ? 'bg-slate-900/80 border-slate-800 hover:border-emerald-500/60'
     : 'bg-slate-50 border-slate-200 hover:border-emerald-300';
@@ -52,9 +49,9 @@ export default function StickerPanel({ isOpen, onClose, onSelectSticker, chatApp
       <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-inherit">
         <div className="min-w-0">
           <div className="font-black text-base flex items-center gap-2">
-            <Store size={18} className="text-emerald-500" /> Digitail 表情市场
+            <Store size={18} className="text-emerald-500" /> Digitail 官方表情包
           </div>
-          <div className="text-xs opacity-60 truncate">原创大表情包 · SVG 动图原型 · 不使用外部搬运素材</div>
+          <div className="text-xs opacity-60 truncate">官方小黄人表情包 · Persona 已理解每张含义</div>
         </div>
         <button type="button" onClick={onClose} className="p-2 rounded-xl hover:bg-slate-100/20 transition-colors shrink-0">
           <X size={18} />
@@ -74,7 +71,7 @@ export default function StickerPanel({ isOpen, onClose, onSelectSticker, chatApp
           onClick={() => setActiveTab('market')}
           className={`shrink-0 px-4 py-3 text-sm font-black border-b-2 transition-colors ${activeTab === 'market' ? 'border-emerald-500 text-emerald-500' : 'border-transparent opacity-60'}`}
         >
-          表情市场
+          官方图库
         </button>
         <button
           type="button"
@@ -92,7 +89,7 @@ export default function StickerPanel({ isOpen, onClose, onSelectSticker, chatApp
             <input
               value={query}
               onChange={event => setQuery(event.target.value)}
-              placeholder="搜索：笑死 / 无语 / 晚安 / 加班 / 吃瓜 / 抱抱..."
+              placeholder="搜索：捂脸无语 / 咖啡续命 / 贴贴抱抱 / 笑死 / 晚安..."
               className="flex-1 bg-transparent outline-none text-sm font-bold"
             />
           </div>
@@ -174,7 +171,7 @@ export default function StickerPanel({ isOpen, onClose, onSelectSticker, chatApp
                 key={sticker.id}
                 type="button"
                 onClick={() => onSelectSticker?.(sticker)}
-                title={sticker.name}
+                title={`${sticker.name}：${sticker.meaning}`}
                 className={`aspect-square rounded-3xl p-1.5 transition-transform hover:scale-105 ${isDark ? 'bg-slate-900 hover:bg-slate-800' : 'bg-slate-50 hover:bg-emerald-50'}`}
               >
                 <img
