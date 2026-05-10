@@ -85,12 +85,44 @@ function sanitizeToolLeak(responseText) {
   return '';
 }
 
+function isChatPersonaPrompt(promptText) {
+  const prompt = String(promptText || '');
+  return prompt.includes('对话历史:') && prompt.includes('Assistant:');
+}
+
+function isPersonaDistillationPrompt(promptText) {
+  const prompt = String(promptText || '');
+  return /DSM\s*2\.2|人格档案|聊天记录原始切片|runtime_card|personality\.value/.test(prompt);
+}
+
+function buildAntiTemplatePersonaGuard(promptText) {
+  if (isChatPersonaPrompt(promptText)) {
+    return `
+
+【人格保真：反模板守门】
+请把上面的资料当作性格纹理，而不是台词脚本。不要按“遇到某情况就回答某句话”的方式执行，也不要输出固定安慰语、固定免责声明、固定犹豫句或固定转折句。
+回应时优先保留这个 Persona 的语气惯性、关系位置、情绪余波和当下话题；可以短、可以含糊、可以停顿，但要像一个真实聊天对象临场反应。
+引用、撤回、表情、分气泡都只是可用的表达习惯，不是任务清单；只有自然滑到那个动作时再使用。
+避免反复使用“我可能不太确定”“如果你愿意的话”“作为AI”等模板式表达，除非它确实来自该人格本身的语言习惯。`;
+  }
+
+  if (isPersonaDistillationPrompt(promptText)) {
+    return `
+
+【侧写保真：反模板守门】
+生成档案时，请从聊天材料中归纳“倾向、惯性、犹豫、亲疏、节奏”，不要写成固定问答脚本。避免“如果出现某情况就回答某句话”的模板化规则。
+触发条件请写成柔性的心理倾向和注意力落点，而不是机械分支；runtime_card 要像压缩后的性格纹理，能诱导自然说话，而不是把 Persona 绑成流程机器人。
+没有证据的地方保持留白或弱置信度，不要用通用模板补满。`;
+  }
+
+  return '';
+}
+
 function shouldInjectRuntimeStatusInstruction(promptText, systemInstructionText, personaId) {
   if (!personaId || personaId === 'default') return false;
   if (!shouldRefreshRuntimeStatus(personaId)) return false;
   if (!systemInstructionText || /只输出合法JSON|严格按下方JSON输出/.test(systemInstructionText)) return false;
-  const prompt = String(promptText || '');
-  return prompt.includes('对话历史:') && prompt.includes('Assistant:');
+  return isChatPersonaPrompt(promptText);
 }
 
 function buildRuntimeStatusInstruction(personaId) {
@@ -207,9 +239,13 @@ const isDeepSeekBusyError = (message = '') => /Service is too busy|busy|temporar
 
 export const callDeepSeekAPI = async (promptText, systemInstructionText = null, mode = 'pro', signal = null, personaId = 'default') => {
   const apiMessages = [];
-  const finalSystemInstructionText = shouldInjectRuntimeStatusInstruction(promptText, systemInstructionText, personaId)
-    ? `${systemInstructionText}${buildRuntimeStatusInstruction(personaId)}`
-    : systemInstructionText;
+  const runtimeStatusInstruction = shouldInjectRuntimeStatusInstruction(promptText, systemInstructionText, personaId)
+    ? buildRuntimeStatusInstruction(personaId)
+    : '';
+  const antiTemplateGuard = buildAntiTemplatePersonaGuard(promptText);
+  const finalSystemInstructionText = [systemInstructionText, runtimeStatusInstruction, antiTemplateGuard]
+    .filter(Boolean)
+    .join('');
 
   if (finalSystemInstructionText) apiMessages.push({ role: 'system', content: finalSystemInstructionText });
   apiMessages.push({ role: 'user', content: promptText });
