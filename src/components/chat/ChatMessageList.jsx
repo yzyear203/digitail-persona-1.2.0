@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Check, CopyCheck, Quote, RotateCcw, Trash2, UserCircle, X } from 'lucide-react';
 import TypingText from '../ui/TypingText';
+import OfficialStickerImage from '../stickers/OfficialStickerImage';
 
 function Avatar({ src, label, isUser, isDark }) {
   const fallbackClass = isUser
@@ -18,14 +19,11 @@ function StickerBubble({ sticker }) {
   const label = sticker?.name || sticker?.emotion || '表情包';
   return (
     <div className="max-w-[56%] select-none" title={label}>
-      <img
-        src={sticker?.url}
+      <OfficialStickerImage
+        sticker={sticker}
         alt={label}
-        loading="lazy"
-        className="max-w-[188px] md:max-w-[238px] max-h-[188px] md:max-h-[238px] object-contain drop-shadow-md"
-        onError={event => {
-          event.currentTarget.style.display = 'none';
-        }}
+        className="w-[188px] h-[188px] md:w-[238px] md:h-[238px] rounded-3xl drop-shadow-md"
+        fallbackClassName="max-w-[188px] md:max-w-[238px] max-h-[188px] md:max-h-[238px] object-contain drop-shadow-md"
       />
     </div>
   );
