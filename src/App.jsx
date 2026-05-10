@@ -5,7 +5,7 @@ import HomePage from './components/pages/HomePage';
 import AuthPage from './components/pages/AuthPage';
 import DashboardPage from './components/pages/DashboardPage';
 import DistillingPage from './components/pages/DistillingPage';
-import ChatPage from './components/pages/ChatPage';
+import ChatPage from './components/pages/ChatPageRefactored';
 import ErrorPage from './components/pages/ErrorPage';
 
 // 导入全局组件与钩子
