@@ -145,15 +145,21 @@ export function normalizeRuntimeStatus(status = {}, fallback = {}) {
   const now = Date.now();
   const source = status || {};
   const durationMinutes = resolveDurationMinutes(source, fallback);
-  const label = compactText(source.label || source.state || source.mood || fallback.label || '在线', 8) || '在线';
+  const label = compactText(source.label || source.state || source.activity_label || fallback.label || '在线', 8) || '在线';
   const activity = compactText(source.activity || source.value || fallback.activity || '', 56);
-  const mood = compactText(source.mood || fallback.mood || '', 12);
+  const mood = compactText(source.mood || source.chat_mood || source.current_mood || fallback.mood || '', 12);
+  const baseMood = compactText(source.base_mood || source.baseMood || source.temperament_mood || fallback.base_mood || fallback.baseMood || mood || '平稳', 12);
+  const chatMood = compactText(source.chat_mood || source.chatMood || source.current_mood || source.reactive_mood || fallback.chat_mood || fallback.chatMood || mood || baseMood, 12);
+  const emotionalShift = compactText(source.emotional_shift || source.emotionalShift || fallback.emotional_shift || fallback.emotionalShift || '', 24);
   const expiresAt = buildExpiresAt(source, durationMinutes, now);
 
   return {
     label,
     activity,
-    mood,
+    mood: chatMood,
+    base_mood: baseMood,
+    chat_mood: chatMood,
+    emotional_shift: emotionalShift,
     color: normalizeColor(source.color || source.tone || fallback.color),
     duration_minutes: durationMinutes,
     updated_at: source.updated_at || source.updatedAt || new Date(now).toISOString(),
@@ -187,12 +193,14 @@ export function readRuntimeStatus(personaId) {
 }
 
 export function shouldRefreshRuntimeStatus(personaId) {
-  return !readRuntimeStatus(personaId);
+  // 状态闹钟不再只按 TTL 刷新；每轮正常聊天都允许模型重新判断“当前聊天情绪”，
+  // 这样 Persona 可以保留基础气质，同时随用户情绪发生轻微变化。
+  return Boolean(personaId);
 }
 
 export function persistRuntimeStatus(personaId, status) {
   if (typeof localStorage === 'undefined' || !personaId || !status) return null;
-  const normalized = normalizeRuntimeStatus(status);
+  const normalized = normalizeRuntimeStatus(status, readRuntimeStatus(personaId) || {});
   try {
     localStorage.setItem(`${RUNTIME_STATUS_STORAGE_PREFIX}${personaId}`, JSON.stringify(normalized));
     if (typeof window !== 'undefined') {
@@ -250,8 +258,11 @@ export function getDisplayRuntimeStatus(persona) {
 
   return {
     label: '待唤醒',
-    activity: '闹钟已到点，下一次聊天时更新状态',
+    activity: '下一次聊天时更新 TA 的生活状态和当前情绪',
     mood: '',
+    base_mood: '未定',
+    chat_mood: '未定',
+    emotional_shift: '',
     color: 'slate',
     duration_minutes: 0,
     updated_at: new Date().toISOString(),
