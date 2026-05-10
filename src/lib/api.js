@@ -85,62 +85,28 @@ function sanitizeToolLeak(responseText) {
   return '';
 }
 
-function isChatPersonaPrompt(promptText) {
-  const prompt = String(promptText || '');
-  return prompt.includes('对话历史:') && prompt.includes('Assistant:');
-}
-
-function isPersonaDistillationPrompt(promptText) {
-  const prompt = String(promptText || '');
-  return /DSM\s*2\.2|人格档案|聊天记录原始切片|runtime_card|personality\.value/.test(prompt);
-}
-
-function buildAntiTemplatePersonaGuard(promptText) {
-  if (isChatPersonaPrompt(promptText)) {
-    return `
-
-【人格保真：反模板守门】
-请把上面的资料当作性格纹理，而不是台词脚本。不要按“遇到某情况就回答某句话”的方式执行，也不要输出固定安慰语、固定免责声明、固定犹豫句或固定转折句。
-回应时优先保留这个 Persona 的语气惯性、关系位置、情绪余波和当下话题；可以短、可以含糊、可以停顿，但要像一个真实聊天对象临场反应。
-引用、撤回、表情、分气泡都只是可用的表达习惯，不是任务清单；只有自然滑到那个动作时再使用。
-避免反复使用“我可能不太确定”“如果你愿意的话”“作为AI”等模板式表达，除非它确实来自该人格本身的语言习惯。`;
-  }
-
-  if (isPersonaDistillationPrompt(promptText)) {
-    return `
-
-【侧写保真：反模板守门】
-生成档案时，请从聊天材料中归纳“倾向、惯性、犹豫、亲疏、节奏”，不要写成固定问答脚本。避免“如果出现某情况就回答某句话”的模板化规则。
-触发条件请写成柔性的心理倾向和注意力落点，而不是机械分支；runtime_card 要像压缩后的性格纹理，能诱导自然说话，而不是把 Persona 绑成流程机器人。
-没有证据的地方保持留白或弱置信度，不要用通用模板补满。`;
-  }
-
-  return '';
-}
-
 function shouldInjectRuntimeStatusInstruction(promptText, systemInstructionText, personaId) {
   if (!personaId || personaId === 'default') return false;
   if (!shouldRefreshRuntimeStatus(personaId)) return false;
   if (!systemInstructionText || /只输出合法JSON|严格按下方JSON输出/.test(systemInstructionText)) return false;
-  return isChatPersonaPrompt(promptText);
+  const prompt = String(promptText || '');
+  return prompt.includes('对话历史:') && prompt.includes('Assistant:');
 }
 
 function buildRuntimeStatusInstruction(personaId) {
   return `
 
-【Persona 状态感知】
-在回复前，请轻量感知 Persona 此刻的生活位置、基础情绪，以及被本轮对话牵动后的即时情绪。这个标记只给前端状态系统读取，不参与聊天文本。
-
-隐藏标记格式保持为：
-[status:{"personaId":"${personaId}","label":"短状态","activity":"此刻正在做的具体生活化事情","color":"red|orange|yellow|green|blue|purple|pink|slate","base_mood":"基础情绪","chat_mood":"本轮对话牵动后的情绪","emotional_shift":"情绪变化原因","duration_minutes":30}]
-
-生成时请像在给一个真实的人补充当下状态：
-- 生活状态来自 TA 的人格、作息、最近聊天氛围和一点自然随机性，不要反复套用同一个场景。
-- 基础情绪是 TA 当下的底色，通常比聊天情绪更稳定。
-- 当前情绪是被用户这轮话题轻微牵动后的反应，可以有细微变化，但不需要戏剧化。
-- 情绪变化原因用一句短语概括内在转折，不写成解释说明。
-- 预计时长按生活事件自然估计，单位分钟，通常落在 10 到 180 之间。
-- 标记之后继续以 Persona 本身的语气自然回复，不解释标记。`;
+【Persona 双层状态标记】
+你需要根据当前人格、最近对话和用户情绪，为 Persona 决定一个“自身生活状态 + 当前聊天情绪”。只在本轮回复最开头输出一次隐藏状态标记，格式严格为：
+[status:{"personaId":"${personaId}","label":"短状态","activity":"此刻正在做的具体生活化事情","color":"red|orange|yellow|green|blue|purple|pink|slate","base_mood":"基础情绪","chat_mood":"被本轮对话影响后的情绪","emotional_shift":"为什么情绪有变化","duration_minutes":30}]
+要求：
+- label 最多 4 个中文字，例如：吃饭中、散步中、发呆中、回宿舍、摸鱼中、赶路中、喝水中、听歌中、补觉中、整理中。
+- activity 是 Persona 自身的生活状态，不要总围绕同一件事；禁止连续机械复用“剪视频/电脑卡/暴躁”。
+- base_mood 是 Persona 此刻的基础底色，例如：松弛、平稳、困倦、专注、散漫、期待、疲惫、轻快、烦躁、低落。
+- chat_mood 是被用户本轮话题影响后的即时情绪，例如：被逗笑、心软、担心、认真、警觉、共情、好奇、无语、放松。
+- emotional_shift 用一句短语说明从基础情绪到聊天情绪的变化原因，例如：被用户语气带轻松了、因为用户低落而收敛、被问题激起兴趣。
+- duration_minutes 是这个生活状态预计持续多久，单位分钟，建议范围 10 到 180。
+- 这个状态只服务前端展示，不要解释它，不要把它当聊天内容。标记后继续正常回复。`;
 }
 
 function stripRuntimeStatusMarkers(responseText) {
@@ -239,13 +205,9 @@ const isDeepSeekBusyError = (message = '') => /Service is too busy|busy|temporar
 
 export const callDeepSeekAPI = async (promptText, systemInstructionText = null, mode = 'pro', signal = null, personaId = 'default') => {
   const apiMessages = [];
-  const runtimeStatusInstruction = shouldInjectRuntimeStatusInstruction(promptText, systemInstructionText, personaId)
-    ? buildRuntimeStatusInstruction(personaId)
-    : '';
-  const antiTemplateGuard = buildAntiTemplatePersonaGuard(promptText);
-  const finalSystemInstructionText = [systemInstructionText, runtimeStatusInstruction, antiTemplateGuard]
-    .filter(Boolean)
-    .join('');
+  const finalSystemInstructionText = shouldInjectRuntimeStatusInstruction(promptText, systemInstructionText, personaId)
+    ? `${systemInstructionText}${buildRuntimeStatusInstruction(personaId)}`
+    : systemInstructionText;
 
   if (finalSystemInstructionText) apiMessages.push({ role: 'system', content: finalSystemInstructionText });
   apiMessages.push({ role: 'user', content: promptText });
@@ -350,7 +312,7 @@ export const callDeepSeekAPI = async (promptText, systemInstructionText = null, 
 
         // 2. 擦除原始返回内容中的 JSON 暴露物，并将结果回传给大模型进行二跳 (Second Hop)
         apiMessages.push({ role: "assistant", content: responseText });
-        apiMessages.push({ role: "user", content: `系统工具执行完毕。检索结果如下:\n${toolResult}\n\n请把这些记忆当成隐约想起的背景，只有在语气自然时才带入，并继续回应用户刚才的话。不要输出工具结构。` });
+        apiMessages.push({ role: "user", content: `系统工具执行完毕。检索结果如下:\n${toolResult}\n\n请结合上述深层记忆，继续极其自然地回答我刚才的问题。绝对禁止再次输出任何工具 JSON 结构。` });
 
         const secondRes = await cloudbase.callFunction({
             name: 'deepseek_generate',
