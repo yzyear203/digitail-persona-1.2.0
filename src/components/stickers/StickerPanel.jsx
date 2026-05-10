@@ -9,6 +9,7 @@ import {
   searchMarketStickers,
   searchStickersSync,
 } from '../../lib/officialStickerStore';
+import OfficialStickerImage from './OfficialStickerImage';
 
 export default function StickerPanel({ isOpen, onClose, onSelectSticker, chatAppearance }) {
   const [query, setQuery] = useState('');
@@ -116,7 +117,9 @@ export default function StickerPanel({ isOpen, onClose, onSelectSticker, chatApp
               <div key={pack.id} className={`rounded-3xl border p-4 transition-colors ${packCardClass}`}>
                 <div className="flex gap-4">
                   <div className="w-24 h-24 rounded-3xl overflow-hidden shrink-0 bg-white/70">
-                    <img src={pack.cover} alt={pack.name} className="w-full h-full object-contain" />
+                    {pack.preview?.[0] && (
+                      <OfficialStickerImage sticker={pack.preview[0]} className="w-full h-full rounded-3xl" fallbackClassName="w-full h-full object-contain" />
+                    )}
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-2">
@@ -126,7 +129,7 @@ export default function StickerPanel({ isOpen, onClose, onSelectSticker, chatApp
                     <p className="text-xs opacity-60 font-bold mt-1 line-clamp-2">{pack.subtitle}</p>
                     <div className="flex gap-1.5 mt-3">
                       {pack.preview.map(sticker => (
-                        <img key={sticker.id} src={sticker.url} alt={sticker.name} className="w-10 h-10 rounded-xl object-contain bg-white/60" />
+                        <OfficialStickerImage key={sticker.id} sticker={sticker} className="w-10 h-10 rounded-xl bg-white/60" fallbackClassName="w-10 h-10 rounded-xl object-contain bg-white/60" />
                       ))}
                     </div>
                     <button
@@ -154,7 +157,9 @@ export default function StickerPanel({ isOpen, onClose, onSelectSticker, chatApp
                   className={`text-left rounded-3xl border p-3 transition-colors ${packCardClass}`}
                 >
                   <div className="flex items-center gap-3">
-                    <img src={pack.cover} alt={pack.name} className="w-16 h-16 rounded-2xl object-contain bg-white/60" />
+                    {pack.preview?.[0] && (
+                      <OfficialStickerImage sticker={pack.preview[0]} className="w-16 h-16 rounded-2xl bg-white/60 shrink-0" fallbackClassName="w-16 h-16 rounded-2xl object-contain bg-white/60 shrink-0" />
+                    )}
                     <div className="min-w-0">
                       <div className="font-black truncate flex items-center gap-1.5"><Sparkles size={14} className="text-emerald-500" /> {pack.name}</div>
                       <div className="text-xs opacity-60 font-bold truncate">{pack.subtitle}</div>
@@ -174,14 +179,10 @@ export default function StickerPanel({ isOpen, onClose, onSelectSticker, chatApp
                 title={`${sticker.name}：${sticker.meaning}`}
                 className={`aspect-square rounded-3xl p-1.5 transition-transform hover:scale-105 ${isDark ? 'bg-slate-900 hover:bg-slate-800' : 'bg-slate-50 hover:bg-emerald-50'}`}
               >
-                <img
-                  src={sticker.url}
-                  alt={sticker.name}
-                  loading="lazy"
-                  className="w-full h-full object-contain rounded-2xl"
-                  onError={event => {
-                    event.currentTarget.style.opacity = '0.25';
-                  }}
+                <OfficialStickerImage
+                  sticker={sticker}
+                  className="w-full h-full rounded-2xl"
+                  fallbackClassName="w-full h-full object-contain rounded-2xl"
                 />
               </button>
             ))}
