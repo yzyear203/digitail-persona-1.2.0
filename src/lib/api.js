@@ -85,25 +85,85 @@ function sanitizeToolLeak(responseText) {
   return '';
 }
 
-function shouldInjectRuntimeStatusInstruction(promptText, systemInstructionText, personaId) {
-  if (!personaId || personaId === 'default') return false;
-  if (!shouldRefreshRuntimeStatus(personaId)) return false;
-  if (!systemInstructionText || /只输出合法JSON|严格按下方JSON输出/.test(systemInstructionText)) return false;
+function isChatPrompt(promptText) {
   const prompt = String(promptText || '');
   return prompt.includes('对话历史:') && prompt.includes('Assistant:');
 }
 
-function buildLatestUserReplyGuard(promptText) {
-  const prompt = String(promptText || '');
-  if (!prompt.includes('对话历史:') || !prompt.includes('Assistant:')) return '';
+function shouldInjectRuntimeStatusInstruction(promptText, systemInstructionText, personaId) {
+  if (!personaId || personaId === 'default') return false;
+  if (!shouldRefreshRuntimeStatus(personaId)) return false;
+  if (!systemInstructionText || /只输出合法JSON|严格按下方JSON输出/.test(systemInstructionText)) return false;
+  return isChatPrompt(promptText);
+}
 
+function getLatestUserTextFromPrompt(promptText) {
+  const prompt = String(promptText || '');
   const userLines = prompt.match(/User:\s*([^\n]+)/g) || [];
   if (!userLines.length) return '';
-
-  const latestUserText = userLines[userLines.length - 1]
+  return userLines[userLines.length - 1]
     .replace(/^User:\s*/, '')
     .replace(/\s+/g, ' ')
-    .trim()
+    .trim();
+}
+
+function normalizeQuestionText(text) {
+  return String(text || '')
+    .replace(/[\s，。,.!！?？~～…]+/g, '')
+    .trim();
+}
+
+function extractPersonaNameFromSystem(systemInstructionText) {
+  const systemText = String(systemInstructionText || '');
+  return systemText.match(/你的名字是“([^”]{1,32})”/)?.[1]?.trim() || '';
+}
+
+function extractKnownUserNameFromSystem(systemInstructionText) {
+  const systemText = String(systemInstructionText || '');
+  return systemText.match(/称呼:([^|\n]{1,32})/)?.[1]?.trim()
+    || systemText.match(/用户称呼[:：]([^|\n。]{1,32})/)?.[1]?.trim()
+    || '';
+}
+
+function buildDeterministicIdentityReply(promptText, systemInstructionText) {
+  if (!isChatPrompt(promptText)) return '';
+
+  const latestUserText = getLatestUserTextFromPrompt(promptText);
+  const normalized = normalizeQuestionText(latestUserText);
+  if (!normalized) return '';
+
+  const asksUserName = /^(我叫什[么麼]名字?|我叫啥名字?|我名字是什[么麼]|我的名字是什[么麼]|你知道我叫什[么麼]|你知道我叫啥|还记得我叫什[么麼]|还记得我叫啥)$/.test(normalized);
+  if (asksUserName) {
+    const knownUserName = extractKnownUserNameFromSystem(systemInstructionText);
+    return knownUserName
+      ? `你叫${knownUserName}。`
+      : '你还没告诉我你的名字，我现在还不知道。';
+  }
+
+  const asksPersonaName = /^(你叫什[么麼]名字?|你叫啥名字?|你名字是什[么麼]|你的名字是什[么麼]|你是谁)$/.test(normalized);
+  if (asksPersonaName) {
+    const personaName = extractPersonaNameFromSystem(systemInstructionText);
+    return personaName
+      ? `我叫${personaName}。`
+      : '我还没有被设置名字。';
+  }
+
+  return '';
+}
+
+function sanitizeSystemInstructionForChat(systemInstructionText, promptText) {
+  if (!isChatPrompt(promptText)) return systemInstructionText;
+
+  return String(systemInstructionText || '')
+    .replace(/\s*\|\s*状态:[^\n]+/g, '')
+    .replace(/状态:[^\n]+/g, '')
+    .replace(/并结合之前状态：“[^”]*”/g, '')
+    .trim();
+}
+
+function buildLatestUserReplyGuard(promptText) {
+  const latestUserText = getLatestUserTextFromPrompt(promptText)
+    .replace(/\s+/g, ' ')
     .slice(0, 160);
 
   if (!latestUserText) return '';
@@ -223,13 +283,17 @@ export const callDoubaoAPI = async (promptText, systemInstructionText = null, im
 const isDeepSeekBusyError = (message = '') => /Service is too busy|busy|temporarily switch|server is overloaded|rate limit|429|503/i.test(String(message));
 
 export const callDeepSeekAPI = async (promptText, systemInstructionText = null, mode = 'pro', signal = null, personaId = 'default') => {
+  const deterministicReply = buildDeterministicIdentityReply(promptText, systemInstructionText);
+  if (deterministicReply) return deterministicReply;
+
   const apiMessages = [];
+  const sanitizedSystemInstructionText = sanitizeSystemInstructionForChat(systemInstructionText, promptText);
   const replyGuardInstruction = buildLatestUserReplyGuard(promptText);
-  const runtimeStatusInstruction = shouldInjectRuntimeStatusInstruction(promptText, systemInstructionText, personaId)
+  const runtimeStatusInstruction = shouldInjectRuntimeStatusInstruction(promptText, sanitizedSystemInstructionText, personaId)
     ? buildRuntimeStatusInstruction(personaId)
     : '';
   const finalSystemInstructionText = [
-    systemInstructionText,
+    sanitizedSystemInstructionText,
     replyGuardInstruction,
     runtimeStatusInstruction,
   ].filter(Boolean).join('\n\n');
