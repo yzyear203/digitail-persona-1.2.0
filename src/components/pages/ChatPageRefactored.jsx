@@ -55,6 +55,11 @@ const USER_SETTLE_DELAY_MS = 3000;
 const DEBUG_FORCE_QUOTE_RECALL = false;
 const DEBUG_RECALL_FALLBACK_TEXT = '撤回测试：如果组件正常，这条会先打出来，然后变成撤回提示。';
 
+function getPersonaId(persona, fallback = 'default') {
+  const id = persona?._id || persona?.id || fallback;
+  return String(id || fallback).trim() || fallback;
+}
+
 function getPersonaConversationState(persona) {
   let daysSinceLastChat = 0;
   let isCooling = false;
@@ -106,7 +111,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
   const lastMemoryExtractionAtRef = useRef(Date.now());
   const lastBufferedUserMessageIdRef = useRef(null);
 
-  const activeId = activePersona?.id || 'default';
+  const activeId = getPersonaId(activePersona);
   const accountId = user?.uid || userProfile?.uid || '';
   const chatKey = `chat_history_${activeId}`;
   const [chatAppearance, setChatAppearance] = useState(() => getStoredChatAppearance(activeId, accountId));
@@ -308,7 +313,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
 
     try {
       const personaSnapshot = activePersonaRef.current;
-      const personaId = personaSnapshot?.id || 'default';
+      const personaId = getPersonaId(personaSnapshot);
       const responseMessages = messagesSnapshot || messagesRef.current;
       const { daysSinceLastChat, isCooling } = getPersonaConversationState(personaSnapshot);
       const hotT1 = getHotT1(personaId);
@@ -414,7 +419,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     });
 
     Promise.resolve().then(async () => {
-      const personaId = activePersonaRef.current?.id || activeId;
+      const personaId = getPersonaId(activePersonaRef.current, activeId);
       if (!db || !personaId || !nextT3) return;
       try {
         await db.collection('personas').doc(personaId).update({ content: JSON.stringify(nextT3) });
