@@ -93,6 +93,24 @@ function shouldInjectRuntimeStatusInstruction(promptText, systemInstructionText,
   return prompt.includes('对话历史:') && prompt.includes('Assistant:');
 }
 
+function buildLatestUserReplyGuard(promptText) {
+  const prompt = String(promptText || '');
+  if (!prompt.includes('对话历史:') || !prompt.includes('Assistant:')) return '';
+
+  const userLines = prompt.match(/User:\s*([^\n]+)/g) || [];
+  if (!userLines.length) return '';
+
+  const latestUserText = userLines[userLines.length - 1]
+    .replace(/^User:\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 160);
+
+  if (!latestUserText) return '';
+
+  return `【本轮回复焦点】\n对话历史里最后一条 User 是：“${latestUserText}”。本轮正文必须先回应这条消息，再按人格自然延展。不要把隐藏状态、主动联系旧话题、长期记忆或自我活动当成正文主线；除非用户明确问“你在干嘛/你现在什么状态”，否则不要展开自己的 activity。`;
+}
+
 function buildRuntimeStatusInstruction(personaId) {
   return `
 
@@ -106,7 +124,8 @@ function buildRuntimeStatusInstruction(personaId) {
 - chat_mood 是被用户本轮话题影响后的即时情绪，例如：被逗笑、心软、担心、认真、警觉、共情、好奇、无语、放松。
 - emotional_shift 用一句短语说明从基础情绪到聊天情绪的变化原因，例如：被用户语气带轻松了、因为用户低落而收敛、被问题激起兴趣。
 - duration_minutes 是这个生活状态预计持续多久，单位分钟，建议范围 10 到 180。
-- 这个状态只服务前端展示，不要解释它，不要把它当聊天内容。标记后继续正常回复。`;
+- 这个状态只服务前端展示，不要解释它，不要把它当聊天内容。
+- 标记后正文第一句必须落在对话历史最后一条 User 上；除非用户主动问状态，否则不要延续 activity。`;
 }
 
 function stripRuntimeStatusMarkers(responseText) {
@@ -205,9 +224,15 @@ const isDeepSeekBusyError = (message = '') => /Service is too busy|busy|temporar
 
 export const callDeepSeekAPI = async (promptText, systemInstructionText = null, mode = 'pro', signal = null, personaId = 'default') => {
   const apiMessages = [];
-  const finalSystemInstructionText = shouldInjectRuntimeStatusInstruction(promptText, systemInstructionText, personaId)
-    ? `${systemInstructionText}${buildRuntimeStatusInstruction(personaId)}`
-    : systemInstructionText;
+  const replyGuardInstruction = buildLatestUserReplyGuard(promptText);
+  const runtimeStatusInstruction = shouldInjectRuntimeStatusInstruction(promptText, systemInstructionText, personaId)
+    ? buildRuntimeStatusInstruction(personaId)
+    : '';
+  const finalSystemInstructionText = [
+    systemInstructionText,
+    replyGuardInstruction,
+    runtimeStatusInstruction,
+  ].filter(Boolean).join('\n\n');
 
   if (finalSystemInstructionText) apiMessages.push({ role: 'system', content: finalSystemInstructionText });
   apiMessages.push({ role: 'user', content: promptText });
