@@ -1,7 +1,12 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, CopyCheck, Quote, RotateCcw, Trash2, UserCircle, X } from 'lucide-react';
 import TypingText from '../ui/TypingText';
 import OfficialStickerImage from '../stickers/OfficialStickerImage';
+import {
+  clearProactivePendingFlag,
+  fetchPendingProactiveMessages,
+  markProactiveMessagesConsumed,
+} from '../../lib/proactiveMessages';
 
 function Avatar({ src, label, isUser, isDark }) {
   const fallbackClass = isUser
@@ -41,6 +46,21 @@ function cleanMessageText(message) {
     .trim();
 }
 
+function getPersonaId(persona) {
+  return String(persona?._id || persona?.id || '').trim();
+}
+
+function shouldWaitForSavedHistory(personaId, messages) {
+  if (!personaId) return true;
+  if (!Array.isArray(messages) || messages.length !== 1) return false;
+  if (messages[0]?.role !== 'system') return false;
+  try {
+    return Boolean(localStorage.getItem(`chat_history_${personaId}`));
+  } catch {
+    return false;
+  }
+}
+
 export default function ChatMessageList({
   messages,
   setMessages,
@@ -54,9 +74,12 @@ export default function ChatMessageList({
   const [isMultiSelect, setIsMultiSelect] = useState(false);
   const [selectedIds, setSelectedIds] = useState([]);
   const longPressTimerRef = useRef(null);
+  const proactiveIdsRef = useRef(new Set());
+  const proactiveFetchingRef = useRef(false);
   const isDark = chatAppearance?.theme === 'dark';
   const assistantAvatar = activePersona?.avatarUrl || '';
   const userAvatar = chatAppearance?.userAvatar || '';
+  const personaId = getPersonaId(activePersona);
   const mainClass = isDark ? 'text-slate-100' : 'text-slate-800';
   const timeClass = isDark ? 'text-slate-400 bg-slate-900/50' : 'text-slate-400';
   const recallClass = isDark
@@ -68,6 +91,52 @@ export default function ChatMessageList({
   const toolbarClass = isDark
     ? 'bg-slate-950/95 border-slate-800 text-slate-100'
     : 'bg-white/95 border-slate-200 text-slate-800';
+
+  const latestVisibleMessage = useMemo(() => {
+    return [...(messages || [])]
+      .reverse()
+      .find(message => message.role !== 'system' && !message.isDeletedForUser && !message.isRecalled);
+  }, [messages]);
+
+  const pullProactiveMessages = useCallback(async () => {
+    if (!personaId || proactiveFetchingRef.current) return;
+    if (shouldWaitForSavedHistory(personaId, messages)) return;
+
+    proactiveFetchingRef.current = true;
+    try {
+      const docs = await fetchPendingProactiveMessages({ personaId });
+      const freshDocs = docs.filter(doc => doc.id && !proactiveIdsRef.current.has(doc.id));
+      if (!freshDocs.length) return;
+
+      freshDocs.forEach(doc => proactiveIdsRef.current.add(doc.id));
+      setMessages(prev => {
+        const existingIds = new Set(prev.map(message => message.id));
+        const incomingMessages = freshDocs
+          .map(doc => doc.message)
+          .filter(message => message?.text && !existingIds.has(message.id));
+        if (!incomingMessages.length) return prev;
+        return [...prev, ...incomingMessages];
+      });
+      await markProactiveMessagesConsumed(freshDocs);
+    } finally {
+      proactiveFetchingRef.current = false;
+    }
+  }, [messages, personaId, setMessages]);
+
+  useEffect(() => {
+    proactiveIdsRef.current = new Set();
+  }, [personaId]);
+
+  useEffect(() => {
+    pullProactiveMessages();
+    const timer = window.setInterval(pullProactiveMessages, 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, [pullProactiveMessages]);
+
+  useEffect(() => {
+    if (!personaId || latestVisibleMessage?.role !== 'user') return;
+    clearProactivePendingFlag(activePersona);
+  }, [activePersona, latestVisibleMessage?.id, latestVisibleMessage?.role, personaId]);
 
   useEffect(() => {
     const closeMenu = () => setContextMenu(null);
