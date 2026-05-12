@@ -8,6 +8,8 @@ import {
   markProactiveMessagesConsumed,
 } from '../../lib/proactiveMessages';
 
+const PROACTIVE_INBOX_COOLDOWN_MS = 5 * 60 * 1000;
+
 function Avatar({ src, label, isUser, isDark }) {
   const fallbackClass = isUser
     ? 'bg-emerald-100 text-emerald-600'
@@ -61,6 +63,56 @@ function shouldWaitForSavedHistory(personaId, messages) {
   }
 }
 
+function getVisibleMessages(messages = []) {
+  return (messages || []).filter(message =>
+    message?.role !== 'system' && !message?.isDeletedForUser && !message?.isRecalled
+  );
+}
+
+function getLatestVisibleMessage(messages = []) {
+  return [...getVisibleMessages(messages)].reverse()[0] || null;
+}
+
+function getLatestUserMessage(messages = []) {
+  return [...getVisibleMessages(messages)].reverse().find(message => message?.role === 'user') || null;
+}
+
+function getMessageTime(message) {
+  const idTime = Number(message?.id);
+  if (Number.isFinite(idTime) && idTime > 1000000000000) return idTime;
+  const parsedTime = new Date(message?.createdAt || message?.time || '').getTime();
+  return Number.isFinite(parsedTime) ? parsedTime : 0;
+}
+
+function hasActiveUserConversation(messages = []) {
+  const latestVisible = getLatestVisibleMessage(messages);
+  if (!latestVisible) return false;
+  if (latestVisible.role === 'user') return true;
+  if (latestVisible.role === 'assistant' && latestVisible.isAnimated) return true;
+
+  const latestUser = getLatestUserMessage(messages);
+  const latestUserTime = getMessageTime(latestUser);
+  return Boolean(latestUserTime && Date.now() - latestUserTime < PROACTIVE_INBOX_COOLDOWN_MS);
+}
+
+function hideProactiveMessagesAfterLatestUser(messages = []) {
+  const latestUser = getLatestUserMessage(messages);
+  const latestUserTime = getMessageTime(latestUser);
+  if (!latestUserTime) return { nextMessages: messages, changed: false };
+
+  let changed = false;
+  const nextMessages = messages.map(message => {
+    const messageTime = getMessageTime(message);
+    if (message?.isProactive && !message.isDeletedForUser && messageTime >= latestUserTime) {
+      changed = true;
+      return { ...message, isDeletedForUser: true, suppressedReason: 'proactive_during_active_user_chat' };
+    }
+    return message;
+  });
+
+  return { nextMessages, changed };
+}
+
 export default function ChatMessageList({
   messages,
   setMessages,
@@ -92,15 +144,12 @@ export default function ChatMessageList({
     ? 'bg-slate-950/95 border-slate-800 text-slate-100'
     : 'bg-white/95 border-slate-200 text-slate-800';
 
-  const latestVisibleMessage = useMemo(() => {
-    return [...(messages || [])]
-      .reverse()
-      .find(message => message.role !== 'system' && !message.isDeletedForUser && !message.isRecalled);
-  }, [messages]);
+  const latestVisibleMessage = useMemo(() => getLatestVisibleMessage(messages), [messages]);
 
   const pullProactiveMessages = useCallback(async () => {
     if (!personaId || proactiveFetchingRef.current) return;
     if (shouldWaitForSavedHistory(personaId, messages)) return;
+    if (hasActiveUserConversation(messages)) return;
 
     proactiveFetchingRef.current = true;
     try {
@@ -110,6 +159,8 @@ export default function ChatMessageList({
 
       freshDocs.forEach(doc => proactiveIdsRef.current.add(doc.id));
       setMessages(prev => {
+        if (hasActiveUserConversation(prev)) return prev;
+
         const existingIds = new Set(prev.map(message => message.id));
         const incomingMessages = freshDocs
           .map(doc => doc.message)
@@ -132,6 +183,14 @@ export default function ChatMessageList({
     const timer = window.setInterval(pullProactiveMessages, 60 * 1000);
     return () => window.clearInterval(timer);
   }, [pullProactiveMessages]);
+
+  useEffect(() => {
+    if (!personaId || !hasActiveUserConversation(messages)) return;
+    setMessages(prev => {
+      const { nextMessages, changed } = hideProactiveMessagesAfterLatestUser(prev);
+      return changed ? nextMessages : prev;
+    });
+  }, [messages, personaId, setMessages]);
 
   useEffect(() => {
     if (!personaId || latestVisibleMessage?.role !== 'user') return;
