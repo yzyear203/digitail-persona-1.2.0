@@ -88,6 +88,16 @@ function getVisibleMessagesSnapshot(messages) {
   return (messages || []).filter(message => !(message.role === 'assistant' && (message.isAnimated || message.isProactive)));
 }
 
+function buildStickerContext(messages) {
+  return (messages || [])
+    .filter(isNormalDialogueMessage)
+    .slice(-6)
+    .map(message => `${message.role === 'user' ? '用户' : 'Persona'}:${formatMessageForModel(message)}`)
+    .filter(Boolean)
+    .join('\n')
+    .slice(-520);
+}
+
 export default function ChatPage({ setAppPhase, messages, setMessages, activePersona, setActivePersona, showMsg, userProfile, user }) {
   const [input, setInput] = useState('');
   const [quotedMessage, setQuotedMessage] = useState(null);
@@ -315,12 +325,13 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
       const personaSnapshot = activePersonaRef.current;
       const personaId = getPersonaId(personaSnapshot);
       const responseMessages = messagesSnapshot || messagesRef.current;
+      const normalMessages = responseMessages.filter(isNormalDialogueMessage);
       const { daysSinceLastChat, isCooling } = getPersonaConversationState(personaSnapshot);
       const hotT1 = getHotT1(personaId);
-      const sysPrompt = buildSystemPrompt(personaSnapshot, hotT1, isCooling, daysSinceLastChat);
+      const stickerContext = buildStickerContext(responseMessages);
+      const sysPrompt = buildSystemPrompt(personaSnapshot, hotT1, isCooling, daysSinceLastChat, { stickerContext });
 
-      const recentT0 = responseMessages
-        .filter(isNormalDialogueMessage)
+      const recentT0 = normalMessages
         .slice(-IMMEDIATE_MEMORY_WINDOW)
         .map(m => ({ role: m.role, text: formatMessageForModel(m) }))
         .filter(m => m.text);
@@ -329,8 +340,8 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
       const prunedT0 = applyBudgetAllocator(recentT0, sysPromptLength, 3000);
       const chatHistoryStr = prunedT0.map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`).join('\n');
 
-      const memoryPrefetchBlock = await prefetchLongTermMemory({ personaId, messagesSnapshot: responseMessages.filter(isNormalDialogueMessage) });
-      const hotTopics = await queryHotTopics({ persona: personaSnapshot, messagesSnapshot: responseMessages.filter(isNormalDialogueMessage), limit: 3 });
+      const memoryPrefetchBlock = await prefetchLongTermMemory({ personaId, messagesSnapshot: normalMessages });
+      const hotTopics = await queryHotTopics({ persona: personaSnapshot, messagesSnapshot: normalMessages, limit: 3 });
       if (generationNonce.current !== currentNonce) return;
 
       const responseText = await callDeepSeekAPI(
@@ -349,7 +360,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
 
       const rawReplyParts = splitAssistantReply(responseText);
       const normalizedReplyParts = DEBUG_FORCE_QUOTE_RECALL
-        ? buildDebugQuoteRecallParts(rawReplyParts, responseMessages.filter(isNormalDialogueMessage), DEBUG_RECALL_FALLBACK_TEXT)
+        ? buildDebugQuoteRecallParts(rawReplyParts, normalMessages, DEBUG_RECALL_FALLBACK_TEXT)
         : rawReplyParts;
       const replyParts = normalizedReplyParts.flatMap(part => splitTextAndStickerMarkers(part));
       setIsTypingIndicator(false);
