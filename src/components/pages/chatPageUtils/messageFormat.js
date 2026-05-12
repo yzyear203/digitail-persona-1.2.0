@@ -1,6 +1,11 @@
 import { getMessagePlainText } from '../../../lib/stickerMessage';
 
-export const CONTROL_MARKER_REGEX = /<del>[\s\S]*?<\/del>|<\/?recall>|\[quote:[\s\S]*?\]/g;
+export const CONTROL_MARKER_REGEX = /<del>[\s\S]*?<\/del>|<\/?recall>|\[recall[:：][\s\S]*?\]|\[quote:[\s\S]*?\]/g;
+
+export function normalizeControlMarkers(text) {
+  return String(text || '')
+    .replace(/\[recall[:：]\s*([^\]]{1,240})\]/g, '<recall>$1</recall>');
+}
 
 export function extractDeclaredUserName(text) {
   const normalizedText = String(text || '').trim();
@@ -18,7 +23,7 @@ export function extractDeclaredUserName(text) {
 }
 
 export function stripControlMarkers(text) {
-  return String(text || '').replace(CONTROL_MARKER_REGEX, '').trim();
+  return normalizeControlMarkers(text).replace(CONTROL_MARKER_REGEX, '').trim();
 }
 
 export function formatMessageForModel(message) {
