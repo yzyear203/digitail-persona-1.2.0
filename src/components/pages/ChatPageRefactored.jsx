@@ -72,6 +72,13 @@ function getPersonaConversationState(persona) {
   return { daysSinceLastChat, isCooling };
 }
 
+function isNormalDialogueMessage(message) {
+  return message?.role !== 'system'
+    && !message?.isRecalled
+    && !message?.isDeletedForUser
+    && !message?.isProactive;
+}
+
 export default function ChatPage({ setAppPhase, messages, setMessages, activePersona, setActivePersona, showMsg, userProfile, user }) {
   const [input, setInput] = useState('');
   const [quotedMessage, setQuotedMessage] = useState(null);
@@ -205,7 +212,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     if (isTypingIndicator) return;
 
     const lastMsg = messages[messages.length - 1];
-    if (!lastMsg || lastMsg.role !== 'assistant') return;
+    if (!lastMsg || lastMsg.role !== 'assistant' || lastMsg.isProactive) return;
 
     if (extractTimerRef.current) clearTimeout(extractTimerRef.current);
 
@@ -214,13 +221,13 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
       const latestUserText = formatMessageForModel(latestUserMsg);
       const forceExtractByPersona = shouldForceMemoryExtraction(latestUserText, activePersonaRef.current);
 
-      if (!hasContentSignal(messages) && !forceExtractByPersona) {
+      if (!hasContentSignal(messages.filter(isNormalDialogueMessage)) && !forceExtractByPersona) {
         console.log('[DSM 守门人] 跳过低信息密度对话');
         return;
       }
 
       if (latestUserMsg?.id && lastBufferedUserMessageIdRef.current !== latestUserMsg.id) {
-        memoryExtractionBufferRef.current.push(buildMemoryExtractionItem(messages));
+        memoryExtractionBufferRef.current.push(buildMemoryExtractionItem(messages.filter(isNormalDialogueMessage)));
         lastBufferedUserMessageIdRef.current = latestUserMsg.id;
       }
 
@@ -303,16 +310,17 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
       const sysPrompt = buildSystemPrompt(personaSnapshot, hotT1, isCooling, daysSinceLastChat);
 
       const recentT0 = messagesRef.current
-        .filter(m => m.role !== 'system' && !m.isRecalled)
+        .filter(isNormalDialogueMessage)
         .slice(-IMMEDIATE_MEMORY_WINDOW)
-        .map(m => ({ role: m.role, text: formatMessageForModel(m) }));
+        .map(m => ({ role: m.role, text: formatMessageForModel(m) }))
+        .filter(m => m.text);
 
       const sysPromptLength = Math.ceil(sysPrompt.length / 1.5);
       const prunedT0 = applyBudgetAllocator(recentT0, sysPromptLength, 3000);
       const chatHistoryStr = prunedT0.map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`).join('\n');
 
-      const memoryPrefetchBlock = await prefetchLongTermMemory({ personaId, messagesSnapshot: messagesRef.current });
-      const hotTopics = await queryHotTopics({ persona: personaSnapshot, messagesSnapshot: messagesRef.current, limit: 3 });
+      const memoryPrefetchBlock = await prefetchLongTermMemory({ personaId, messagesSnapshot: messagesRef.current.filter(isNormalDialogueMessage) });
+      const hotTopics = await queryHotTopics({ persona: personaSnapshot, messagesSnapshot: messagesRef.current.filter(isNormalDialogueMessage), limit: 3 });
       if (generationNonce.current !== currentNonce) return;
 
       const responseText = await callDeepSeekAPI(
@@ -331,7 +339,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
 
       const rawReplyParts = splitAssistantReply(responseText);
       const normalizedReplyParts = DEBUG_FORCE_QUOTE_RECALL
-        ? buildDebugQuoteRecallParts(rawReplyParts, messagesRef.current, DEBUG_RECALL_FALLBACK_TEXT)
+        ? buildDebugQuoteRecallParts(rawReplyParts, messagesRef.current.filter(isNormalDialogueMessage), DEBUG_RECALL_FALLBACK_TEXT)
         : rawReplyParts;
       const replyParts = normalizedReplyParts.flatMap(part => splitTextAndStickerMarkers(part));
       setIsTypingIndicator(false);
@@ -441,7 +449,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     const currentNonce = cancelPendingAssistantWork();
 
     setMessages(prev => {
-      const filtered = prev.filter(m => !(m.role === 'assistant' && m.isAnimated));
+      const filtered = prev.filter(m => !(m.role === 'assistant' && (m.isAnimated || m.isProactive)));
       return [...filtered, { id: currentNonce, role: 'user', text: messageText, time: new Date().toLocaleTimeString() }];
     });
 
@@ -463,7 +471,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     });
 
     setMessages(prev => {
-      const filtered = prev.filter(m => !(m.role === 'assistant' && m.isAnimated));
+      const filtered = prev.filter(m => !(m.role === 'assistant' && (m.isAnimated || m.isProactive)));
       return [...filtered, stickerMessage];
     });
 
@@ -486,7 +494,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     setIsExtracting(true);
     try {
       const chatHistory = messages
-        .filter(m => m.role !== 'system' && !m.isRecalled)
+        .filter(isNormalDialogueMessage)
         .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${formatMessageForModel(m)}`)
         .join('\n');
       const jsonResponse = await callDoubaoAPI(`分析对话，提取所有代办事项，没有返回空数组。\n\n${chatHistory}`, '严格输出 JSON 字符串数组，例如：["联系张三", "发送邮件"]。');
