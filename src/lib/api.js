@@ -90,6 +90,60 @@ function isChatPrompt(promptText) {
   return prompt.includes('对话历史:') && prompt.includes('Assistant:');
 }
 
+function parseChatPrompt(promptText) {
+  if (!isChatPrompt(promptText)) return null;
+
+  const prompt = String(promptText || '');
+  const historyStart = prompt.indexOf('对话历史:');
+  if (historyStart < 0) return null;
+
+  const contextBlock = prompt.slice(0, historyStart).trim();
+  const historyBlock = prompt
+    .slice(historyStart + '对话历史:'.length)
+    .replace(/\n*Assistant:\s*$/i, '')
+    .trim();
+
+  const messages = [];
+  const pattern = /(?:^|\n)(User|Assistant):\s*([\s\S]*?)(?=\n(?:User|Assistant):\s*|$)/g;
+  let match;
+  while ((match = pattern.exec(historyBlock)) !== null) {
+    const role = match[1] === 'User' ? 'user' : 'assistant';
+    const content = String(match[2] || '').trim();
+    if (content) messages.push({ role, content });
+  }
+
+  return { contextBlock, messages };
+}
+
+function buildApiMessagesFromPrompt(promptText, finalSystemInstructionText) {
+  const parsedChat = parseChatPrompt(promptText);
+  if (!parsedChat || parsedChat.messages.length === 0) {
+    return [
+      ...(finalSystemInstructionText ? [{ role: 'system', content: finalSystemInstructionText }] : []),
+      { role: 'user', content: promptText },
+    ];
+  }
+
+  const systemContent = [
+    finalSystemInstructionText,
+    parsedChat.contextBlock ? `【本轮辅助上下文】\n${parsedChat.contextBlock}` : '',
+  ].filter(Boolean).join('\n\n');
+
+  const apiMessages = [];
+  if (systemContent) apiMessages.push({ role: 'system', content: systemContent });
+
+  const dialogueMessages = parsedChat.messages.slice(-24);
+  apiMessages.push(...dialogueMessages);
+
+  const latestUser = [...dialogueMessages].reverse().find(message => message.role === 'user');
+  const lastMessage = apiMessages[apiMessages.length - 1];
+  if (latestUser && lastMessage?.role !== 'user') {
+    apiMessages.push({ role: 'user', content: latestUser.content });
+  }
+
+  return apiMessages;
+}
+
 function shouldInjectRuntimeStatusInstruction(promptText, systemInstructionText, personaId) {
   if (!personaId || personaId === 'default') return false;
   if (!shouldRefreshRuntimeStatus(personaId)) return false;
@@ -98,6 +152,10 @@ function shouldInjectRuntimeStatusInstruction(promptText, systemInstructionText,
 }
 
 function getLatestUserTextFromPrompt(promptText) {
+  const parsedChat = parseChatPrompt(promptText);
+  const latestUser = parsedChat?.messages ? [...parsedChat.messages].reverse().find(message => message.role === 'user') : null;
+  if (latestUser?.content) return latestUser.content.trim();
+
   const prompt = String(promptText || '');
   const userLines = prompt.match(/User:\s*([^\n]+)/g) || [];
   if (!userLines.length) return '';
@@ -192,64 +250,6 @@ function stripRuntimeStatusMarkers(responseText) {
   return extractAndPersistRuntimeStatusMarkers(responseText).text;
 }
 
-async function retrieveLongTermMemory(personaId, query) {
-  let toolResult = '[记忆库无相关记录]';
-  if (!db) return toolResult;
-
-  try {
-    let queryRes = await db.collection('persona_memories')
-      .where({ user_id: personaId })
-      .orderBy('timestamp', 'desc')
-      .limit(30)
-      .get();
-
-    if (!queryRes.data?.length) {
-      queryRes = await db.collection('persona_memories')
-        .where({ personaId })
-        .orderBy('timestamp', 'desc')
-        .limit(30)
-        .get();
-    }
-
-    const scoredMemories = (queryRes.data || [])
-      .map(normalizeMemoryRecord)
-      .map(memory => ({
-        ...memory,
-        keywordScore: estimateKeywordScore(memory.content, query),
-      }))
-      .sort((a, b) => b.keywordScore - a.keywordScore);
-
-    const matchedMemories = scoredMemories.filter(m => m.keywordScore > 0).slice(0, 6);
-    const finalMemories = matchedMemories.length > 0 ? matchedMemories : scoredMemories.slice(0, 3);
-
-    if (finalMemories.length > 0) {
-      toolResult = '[深层记忆回源数据]:\n' + finalMemories.map(m => `- ${m.content}`).join('\n');
-    }
-  } catch (dbErr) {
-    console.error('TCB 深态记忆库检索失败:', dbErr);
-    toolResult = '[记忆检索系统暂时离线]';
-  }
-
-  return toolResult;
-}
-
-async function callDeepSeekFunction(apiMessages, isPro, personaId, timeout) {
-  const res = await cloudbase.callFunction({
-    name: 'deepseek_generate',
-    data: {
-      messages: apiMessages,
-      model: isPro ? 'deepseek-v4-pro' : 'deepseek-v4-flash',
-      useThinking: isPro,
-      personaId,
-    },
-    timeout,
-  });
-
-  const data = res.result;
-  if (data && data.error) throw new Error(data.error.message || JSON.stringify(data.error));
-  return data.choices?.[0]?.message?.content || '';
-}
-
 export const callDoubaoAPI = async (promptText, systemInstructionText = null, imageParts = []) => {
   const apiMessages = [];
   if (systemInstructionText) apiMessages.push({ role: 'system', content: systemInstructionText });
@@ -279,14 +279,12 @@ export const callDoubaoAPI = async (promptText, systemInstructionText = null, im
   }
 };
 
-// ================== DeepSeek 双轨制引擎 ==================
 const isDeepSeekBusyError = (message = '') => /Service is too busy|busy|temporarily switch|server is overloaded|rate limit|429|503/i.test(String(message));
 
 export const callDeepSeekAPI = async (promptText, systemInstructionText = null, mode = 'pro', signal = null, personaId = 'default') => {
   const deterministicReply = buildDeterministicIdentityReply(promptText, systemInstructionText);
   if (deterministicReply) return deterministicReply;
 
-  const apiMessages = [];
   const sanitizedSystemInstructionText = sanitizeSystemInstructionForChat(systemInstructionText, promptText);
   const replyGuardInstruction = buildLatestUserReplyGuard(promptText);
   const runtimeStatusInstruction = shouldInjectRuntimeStatusInstruction(promptText, sanitizedSystemInstructionText, personaId)
@@ -298,11 +296,8 @@ export const callDeepSeekAPI = async (promptText, systemInstructionText = null, 
     runtimeStatusInstruction,
   ].filter(Boolean).join('\n\n');
 
-  if (finalSystemInstructionText) apiMessages.push({ role: 'system', content: finalSystemInstructionText });
-  apiMessages.push({ role: 'user', content: promptText });
-
+  const apiMessages = buildApiMessagesFromPrompt(promptText, finalSystemInstructionText);
   const isPro = mode === 'pro';
-  const timeout = isPro ? 60000 : 15000;
 
   return new Promise(async (resolve, reject) => {
     if (signal) {
@@ -319,7 +314,7 @@ export const callDeepSeekAPI = async (promptText, systemInstructionText = null, 
             messages: apiMessages,
             model: useProModel ? 'deepseek-v4-pro' : 'deepseek-v4-flash',
             useThinking: useProModel,
-            personaId: personaId,
+            personaId,
             enableMemoryTools: useProModel
           },
           timeout: useProModel ? 60000 : 15000
@@ -328,7 +323,6 @@ export const callDeepSeekAPI = async (promptText, systemInstructionText = null, 
 
       let res = await callDeepSeekFunction(mode);
 
-      // 异步回来后再次检查是否已被阻断，如果是，抛弃数据
       if (signal && signal.aborted) return reject(new DOMException('Aborted', 'AbortError'));
 
       let data = res.result;
@@ -342,9 +336,8 @@ export const callDeepSeekAPI = async (promptText, systemInstructionText = null, 
       }
       if (data && data.error) throw new Error(data.error.message || JSON.stringify(data.error));
 
-      let responseText = data.choices?.[0]?.message?.content || "";
+      let responseText = data.choices?.[0]?.message?.content || '';
 
-      // 👑 首席架构师防线：无感拦截 Tool Call 文本模式 (同时兼容蓝图的 retrieve_long_term_memory 与遗留的 search_subconscious_memory)
       const toolRegex = /```json\s*(\{[\s\S]*?"tool_name"\s*:\s*"(retrieve_long_term_memory|search_subconscious_memory)"[\s\S]*?\})\s*```|\{\s*"tool_name"\s*:\s*"(retrieve_long_term_memory|search_subconscious_memory)"[\s\S]*?\}/;
       const match = responseText.match(toolRegex);
 
@@ -354,14 +347,13 @@ export const callDeepSeekAPI = async (promptText, systemInstructionText = null, 
         try {
           toolCall = JSON.parse(jsonStr);
         } catch (parseError) {
-          console.warn("Tool Call JSON 解析失败，放行输出:", jsonStr, parseError);
+          console.warn('Tool Call JSON 解析失败，放行输出:', jsonStr, parseError);
           return resolve(stripRuntimeStatusMarkers(responseText));
         }
 
         console.log(`⚡ [DSM Tool Interceptor] 侦测到深态回源请求 [${toolCall.tool_name}]:`, toolCall.input?.query);
 
-        // 1. 直连 TCB 执行 T2 向量回源 (纯前端暂用倒排模糊匹配替代原生向量检索)
-        let toolResult = "[记忆库无相关记录]";
+        let toolResult = '[记忆库无相关记录]';
         if (db) {
           try {
              let queryRes = await db.collection('persona_memories')
@@ -370,7 +362,6 @@ export const callDeepSeekAPI = async (promptText, systemInstructionText = null, 
                .limit(30)
                .get();
 
-             // 兼容旧版云函数写入的 personaId/text 结构，避免迁移期深态记忆断链
              if (!queryRes.data?.length) {
                queryRes = await db.collection('persona_memories')
                  .where({ personaId })
@@ -379,7 +370,7 @@ export const callDeepSeekAPI = async (promptText, systemInstructionText = null, 
                  .get();
              }
 
-             const query = toolCall.input?.query || "";
+             const query = toolCall.input?.query || getFallbackQuery(apiMessages, promptText);
              const scoredMemories = (queryRes.data || [])
                .map(normalizeMemoryRecord)
                .map(memory => ({
@@ -394,25 +385,24 @@ export const callDeepSeekAPI = async (promptText, systemInstructionText = null, 
                toolResult = `[深层记忆回源数据]:\n` + finalMemories.map(m => `- ${m.content}`).join('\n');
              }
           } catch (dbErr) {
-             console.error("TCB 深态记忆库检索失败:", dbErr);
-             toolResult = "[记忆检索系统暂时离线]";
+             console.error('TCB 深态记忆库检索失败:', dbErr);
+             toolResult = '[记忆检索系统暂时离线]';
           }
         }
 
-        // 2. 擦除原始返回内容中的 JSON 暴露物，并将结果回传给大模型进行二跳 (Second Hop)
-        apiMessages.push({ role: "assistant", content: responseText });
-        apiMessages.push({ role: "user", content: `系统工具执行完毕。检索结果如下:\n${toolResult}\n\n请结合上述深层记忆，继续极其自然地回答我刚才的问题。绝对禁止再次输出任何工具 JSON 结构。` });
+        apiMessages.push({ role: 'assistant', content: responseText });
+        apiMessages.push({ role: 'user', content: `系统工具执行完毕。检索结果如下:\n${toolResult}\n\n请结合上述深层记忆，继续极其自然地回答我刚才的问题。绝对禁止再次输出任何工具 JSON 结构。` });
 
         const secondRes = await cloudbase.callFunction({
-            name: 'deepseek_generate',
-            data: {
-              messages: apiMessages,
-              model: isPro ? 'deepseek-v4-pro' : 'deepseek-v4-flash',
-              useThinking: isPro,
-              personaId,
-              enableMemoryTools: false
-            },
-            timeout: isPro ? 60000 : 15000
+          name: 'deepseek_generate',
+          data: {
+            messages: apiMessages,
+            model: isPro ? 'deepseek-v4-pro' : 'deepseek-v4-flash',
+            useThinking: isPro,
+            personaId,
+            enableMemoryTools: false
+          },
+          timeout: isPro ? 60000 : 15000
         });
 
         if (signal && signal.aborted) return reject(new DOMException('Aborted', 'AbortError'));
@@ -420,8 +410,7 @@ export const callDeepSeekAPI = async (promptText, systemInstructionText = null, 
         const secondData = secondRes.result;
         if (secondData && secondData.error) throw new Error(secondData.error.message || JSON.stringify(secondData.error));
 
-        // 将模型融合记忆后的最终答案返回给上层 UI
-        responseText = secondData.choices?.[0]?.message?.content || "";
+        responseText = secondData.choices?.[0]?.message?.content || '';
       }
 
       responseText = stripRuntimeStatusMarkers(responseText);
