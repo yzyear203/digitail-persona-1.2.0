@@ -86,14 +86,103 @@ export const OFFICIAL_STICKER_CATALOG = RAW_STICKERS.map(([key, row, col, name, 
   aliases,
 }));
 
-export function getOfficialStickerKeywordPresets() {
-  return Array.from(new Set(
-    OFFICIAL_STICKER_CATALOG.flatMap(sticker => [sticker.emotion, ...(sticker.aliases || [])])
-  )).slice(0, 56);
+const DEFAULT_STICKER_KEYS = [
+  'ok_hand',
+  'chin_think',
+  'facepalm',
+  'laugh_big_tears',
+  'wide_eye_shock',
+  'double_hug',
+  'plain_sad',
+  'fighting_fist',
+  'party_pop',
+  'finger_heart',
+  'sleepy_zzz',
+  'mask_sick',
+];
+
+const CATEGORY_KEYWORDS = [
+  { keys: ['double_hug', 'pleading_tears', 'plain_sad', 'waterfall_cry', 'broken_heart'], words: ['难过', '伤心', '哭', '委屈', '安慰', '抱抱', '低落', '失恋', '分手', '破防', '累'] },
+  { keys: ['laugh_big_tears', 'big_laugh_tears', 'facepalm', 'look_up_speechless', 'poop_laugh'], words: ['笑', '哈哈', '离谱', '无语', '绷不住', '吐槽', '尴尬', '救命', '没眼看'] },
+  { keys: ['wide_eye_shock', 'angry_shock', 'scream_face', 'alarm_panic', 'bomb_excited'], words: ['震惊', '吓', '真的假的', '啊啊', '爆炸', '出事', '紧急', '重磅'] },
+  { keys: ['fighting_fist', 'ok_hand', 'thinking_serious', 'chin_think', 'pray_calm'], words: ['加油', '努力', '考试', '学习', '代码', 'bug', '问题', '分析', '怎么办', '求', '拜托'] },
+  { keys: ['party_pop', 'gift_present', 'birthday_cake', 'sparkler_celebrate', 'red_packet'], words: ['生日', '快乐', '庆祝', '好消息', '礼物', '红包', '发财', '赢', '成功'] },
+  { keys: ['finger_heart', 'kiss_heart', 'rose_romance', 'heart_drool', 'cover_mouth_shy'], words: ['喜欢', '爱', '心动', '可爱', '害羞', '亲亲', '比心', '甜'] },
+  { keys: ['sleepy_zzz', 'sleepy_round_zzz', 'moon_sleep', 'coffee_break'], words: ['困', '睡', '晚安', '累', '咖啡', '熬夜', '续命'] },
+  { keys: ['mask_sick', 'plain_sad', 'double_hug', 'pray_calm'], words: ['生病', '不舒服', '医院', '复查', '口罩', '健康', '手术'] },
+  { keys: ['red_angry', 'thumbs_down_angry', 'knife_smirk', 'bored_side_eye'], words: ['生气', '烦', '红温', '不满', '别惹我', '差评', '拒绝'] },
+];
+
+function getStickerByKey(key) {
+  return OFFICIAL_STICKER_CATALOG.find(sticker => sticker.key === key);
 }
 
-export function buildOfficialStickerPromptList() {
-  return OFFICIAL_STICKER_CATALOG
+function normalizeContextText(value) {
+  return String(value || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function scoreSticker(sticker, contextText) {
+  const context = normalizeContextText(contextText);
+  if (!context) return DEFAULT_STICKER_KEYS.includes(sticker.key) ? 2 : 0;
+
+  const searchable = [sticker.name, sticker.emotion, sticker.meaning, ...(sticker.aliases || [])]
+    .join(' ')
+    .toLowerCase();
+
+  let score = 0;
+  for (const token of [sticker.name, sticker.emotion, ...(sticker.aliases || [])]) {
+    const normalizedToken = normalizeContextText(token);
+    if (normalizedToken && context.includes(normalizedToken)) score += normalizedToken.length >= 2 ? 8 : 3;
+  }
+
+  for (const group of CATEGORY_KEYWORDS) {
+    const hitCount = group.words.filter(word => context.includes(word.toLowerCase())).length;
+    if (hitCount > 0 && group.keys.includes(sticker.key)) score += hitCount * 6;
+  }
+
+  if (context.includes(sticker.emotion.toLowerCase())) score += 8;
+  if (searchable.includes(context.slice(-4))) score += 1;
+  if (DEFAULT_STICKER_KEYS.includes(sticker.key)) score += 1;
+  return score;
+}
+
+export function selectOfficialStickerCandidates(contextText = '', limit = 12) {
+  const scored = OFFICIAL_STICKER_CATALOG
+    .map(sticker => ({ sticker, score: scoreSticker(sticker, contextText) }))
+    .sort((a, b) => b.score - a.score || a.sticker.row - b.sticker.row || a.sticker.col - b.sticker.col);
+
+  const selected = [];
+  const seenKeys = new Set();
+  for (const item of scored) {
+    if (item.score <= 0) continue;
+    if (seenKeys.has(item.sticker.key)) continue;
+    selected.push(item.sticker);
+    seenKeys.add(item.sticker.key);
+    if (selected.length >= limit) return selected;
+  }
+
+  for (const key of DEFAULT_STICKER_KEYS) {
+    const sticker = getStickerByKey(key);
+    if (sticker && !seenKeys.has(sticker.key)) {
+      selected.push(sticker);
+      seenKeys.add(sticker.key);
+    }
+    if (selected.length >= limit) break;
+  }
+
+  return selected;
+}
+
+export function getOfficialStickerKeywordPresets(contextText = '', limit = 24) {
+  return Array.from(new Set(
+    selectOfficialStickerCandidates(contextText, Math.max(12, Math.ceil(limit / 2)))
+      .flatMap(sticker => [sticker.emotion, ...(sticker.aliases || [])])
+  )).slice(0, limit);
+}
+
+export function buildOfficialStickerPromptList(contextText = '', options = {}) {
+  const limit = Number(options.limit || 12);
+  return selectOfficialStickerCandidates(contextText, limit)
     .map(sticker => `${sticker.name}：[sticker:${sticker.emotion}] / ${sticker.meaning}`)
     .join('\n');
 }
