@@ -11,11 +11,59 @@ function normalizeTime(value) {
   return date.toLocaleTimeString();
 }
 
+function getLocalChatHistory(personaId) {
+  if (typeof localStorage === 'undefined' || !personaId) return [];
+  try {
+    const raw = localStorage.getItem(`chat_history_${personaId}`);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function getLatestVisibleLocalMessage(personaId) {
+  return [...getLocalChatHistory(personaId)]
+    .reverse()
+    .find(message => message?.role !== 'system' && !message?.isDeletedForUser && !message?.isRecalled);
+}
+
+function getLatestLocalUserMessage(personaId) {
+  return [...getLocalChatHistory(personaId)]
+    .reverse()
+    .find(message => message?.role === 'user' && !message?.isDeletedForUser && !message?.isRecalled);
+}
+
+function getMessageTimestamp(message) {
+  const idTime = Number(message?.id);
+  if (Number.isFinite(idTime) && idTime > 1000000000000) return idTime;
+  return 0;
+}
+
+function getDocCreatedTimestamp(doc) {
+  const createdAt = new Date(doc?.createdAt || '').getTime();
+  if (Number.isFinite(createdAt)) return createdAt;
+  const messageId = Number(doc?.messageId);
+  if (Number.isFinite(messageId) && messageId > 1000000000000) return messageId;
+  return 0;
+}
+
+async function consumeDocsSilently(docs = []) {
+  if (!db || !docs.length) return;
+  await Promise.allSettled(docs
+    .filter(doc => doc?._id || doc?.id)
+    .map(doc => db.collection('persona_proactive_messages').doc(doc._id || doc.id).update({
+      consumed: true,
+      consumedAt: new Date().toISOString(),
+      consumedReason: 'stale_after_user_message',
+    })));
+}
+
 export async function fetchPendingProactiveMessages({ personaId, uid, limit = 8 }) {
   if (!db || !personaId) return [];
 
   try {
-    let query = db.collection('persona_proactive_messages')
+    const query = db.collection('persona_proactive_messages')
       .where({ personaId, consumed: false })
       .orderBy('createdAt', 'asc')
       .limit(limit);
@@ -25,7 +73,30 @@ export async function fetchPendingProactiveMessages({ personaId, uid, limit = 8 
       .filter(doc => !uid || !doc.uid || String(doc.uid) === String(uid))
       .filter(doc => String(doc.text || '').trim());
 
-    return docs.map(doc => ({
+    if (!docs.length) return [];
+
+    const latestVisible = getLatestVisibleLocalMessage(personaId);
+    const latestUser = getLatestLocalUserMessage(personaId);
+    const latestUserTime = getMessageTimestamp(latestUser);
+
+    if (latestVisible?.role === 'user') {
+      const staleDocs = latestUserTime
+        ? docs.filter(doc => getDocCreatedTimestamp(doc) <= latestUserTime)
+        : [];
+      await consumeDocsSilently(staleDocs);
+      return [];
+    }
+
+    const freshDocs = latestUserTime
+      ? docs.filter(doc => getDocCreatedTimestamp(doc) > latestUserTime)
+      : docs;
+    const staleDocs = latestUserTime
+      ? docs.filter(doc => getDocCreatedTimestamp(doc) <= latestUserTime)
+      : [];
+
+    await consumeDocsSilently(staleDocs);
+
+    return freshDocs.map(doc => ({
       ...doc,
       id: doc._id || doc.id,
       message: {
