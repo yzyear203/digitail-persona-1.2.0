@@ -79,6 +79,10 @@ function isNormalDialogueMessage(message) {
     && !message?.isProactive;
 }
 
+function getVisibleMessagesSnapshot(messages) {
+  return (messages || []).filter(message => !(message.role === 'assistant' && (message.isAnimated || message.isProactive)));
+}
+
 export default function ChatPage({ setAppPhase, messages, setMessages, activePersona, setActivePersona, showMsg, userProfile, user }) {
   const [input, setInput] = useState('');
   const [quotedMessage, setQuotedMessage] = useState(null);
@@ -293,7 +297,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     return () => clearTimeout(extractTimerRef.current);
   }, [messages, isTypingIndicator, activeId, setActivePersona, showMsg]);
 
-  const runAssistantResponse = async (currentNonce) => {
+  const runAssistantResponse = async (currentNonce, messagesSnapshot = null) => {
     if (generationNonce.current !== currentNonce) return;
 
     const controller = new AbortController();
@@ -305,11 +309,12 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     try {
       const personaSnapshot = activePersonaRef.current;
       const personaId = personaSnapshot?.id || 'default';
+      const responseMessages = messagesSnapshot || messagesRef.current;
       const { daysSinceLastChat, isCooling } = getPersonaConversationState(personaSnapshot);
       const hotT1 = getHotT1(personaId);
       const sysPrompt = buildSystemPrompt(personaSnapshot, hotT1, isCooling, daysSinceLastChat);
 
-      const recentT0 = messagesRef.current
+      const recentT0 = responseMessages
         .filter(isNormalDialogueMessage)
         .slice(-IMMEDIATE_MEMORY_WINDOW)
         .map(m => ({ role: m.role, text: formatMessageForModel(m) }))
@@ -319,8 +324,8 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
       const prunedT0 = applyBudgetAllocator(recentT0, sysPromptLength, 3000);
       const chatHistoryStr = prunedT0.map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`).join('\n');
 
-      const memoryPrefetchBlock = await prefetchLongTermMemory({ personaId, messagesSnapshot: messagesRef.current.filter(isNormalDialogueMessage) });
-      const hotTopics = await queryHotTopics({ persona: personaSnapshot, messagesSnapshot: messagesRef.current.filter(isNormalDialogueMessage), limit: 3 });
+      const memoryPrefetchBlock = await prefetchLongTermMemory({ personaId, messagesSnapshot: responseMessages.filter(isNormalDialogueMessage) });
+      const hotTopics = await queryHotTopics({ persona: personaSnapshot, messagesSnapshot: responseMessages.filter(isNormalDialogueMessage), limit: 3 });
       if (generationNonce.current !== currentNonce) return;
 
       const responseText = await callDeepSeekAPI(
@@ -339,7 +344,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
 
       const rawReplyParts = splitAssistantReply(responseText);
       const normalizedReplyParts = DEBUG_FORCE_QUOTE_RECALL
-        ? buildDebugQuoteRecallParts(rawReplyParts, messagesRef.current.filter(isNormalDialogueMessage), DEBUG_RECALL_FALLBACK_TEXT)
+        ? buildDebugQuoteRecallParts(rawReplyParts, responseMessages.filter(isNormalDialogueMessage), DEBUG_RECALL_FALLBACK_TEXT)
         : rawReplyParts;
       const replyParts = normalizedReplyParts.flatMap(part => splitTextAndStickerMarkers(part));
       setIsTypingIndicator(false);
@@ -426,10 +431,10 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     setQuotedMessage({ ...message, text });
   };
 
-  const scheduleAssistantAfterUserInput = (currentNonce) => {
+  const scheduleAssistantAfterUserInput = (currentNonce, messagesSnapshot) => {
     pendingResponseTimerRef.current = setTimeout(() => {
       pendingResponseTimerRef.current = null;
-      runAssistantResponse(currentNonce);
+      runAssistantResponse(currentNonce, messagesSnapshot);
     }, USER_SETTLE_DELAY_MS);
   };
 
@@ -447,14 +452,14 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
     persistDeclaredUserName(extractDeclaredUserName(userText));
 
     const currentNonce = cancelPendingAssistantWork();
+    const userMessage = { id: currentNonce, role: 'user', text: messageText, time: new Date().toLocaleTimeString() };
+    const nextMessagesSnapshot = [...getVisibleMessagesSnapshot(messagesRef.current), userMessage];
 
-    setMessages(prev => {
-      const filtered = prev.filter(m => !(m.role === 'assistant' && (m.isAnimated || m.isProactive)));
-      return [...filtered, { id: currentNonce, role: 'user', text: messageText, time: new Date().toLocaleTimeString() }];
-    });
+    messagesRef.current = nextMessagesSnapshot;
+    setMessages(nextMessagesSnapshot);
 
     touchLastChatTime();
-    scheduleAssistantAfterUserInput(currentNonce);
+    scheduleAssistantAfterUserInput(currentNonce, nextMessagesSnapshot);
   };
 
   const handleSendSticker = async (sticker) => {
@@ -470,13 +475,12 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
       id: currentNonce,
     });
 
-    setMessages(prev => {
-      const filtered = prev.filter(m => !(m.role === 'assistant' && (m.isAnimated || m.isProactive)));
-      return [...filtered, stickerMessage];
-    });
+    const nextMessagesSnapshot = [...getVisibleMessagesSnapshot(messagesRef.current), stickerMessage];
+    messagesRef.current = nextMessagesSnapshot;
+    setMessages(nextMessagesSnapshot);
 
     touchLastChatTime();
-    scheduleAssistantAfterUserInput(currentNonce);
+    scheduleAssistantAfterUserInput(currentNonce, nextMessagesSnapshot);
   };
 
   const handleClearChatHistory = () => {
