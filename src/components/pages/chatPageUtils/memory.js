@@ -19,6 +19,13 @@ const GENERIC_MEMORY_STOPWORDS = new Set([
   '高价值', '事件', '偏好', '目标', '表达', '发生', '正在', '已经', '可能', '明显', '关系', '情绪',
 ]);
 
+function isMemoryEligibleMessage(message) {
+  return message?.role !== 'system'
+    && !message?.isRecalled
+    && !message?.isDeletedForUser
+    && !message?.isProactive;
+}
+
 function parsePersonaContent(persona) {
   try {
     return JSON.parse(persona?.content || '{}');
@@ -98,13 +105,14 @@ export function shouldForceMemoryExtraction(text, persona) {
 }
 
 export function shouldPrefetchLongTermMemory(messagesSnapshot) {
-  const latestUserText = formatMessageForModel(getLatestUserMessage(messagesSnapshot));
-  return MEMORY_PREFETCH_REGEX.test(latestUserText) || hasContentSignal(messagesSnapshot);
+  const eligibleMessages = (messagesSnapshot || []).filter(isMemoryEligibleMessage);
+  const latestUserText = formatMessageForModel(getLatestUserMessage(eligibleMessages));
+  return MEMORY_PREFETCH_REGEX.test(latestUserText) || hasContentSignal(eligibleMessages);
 }
 
 export function buildMemoryQuery(messagesSnapshot) {
   return [...(messagesSnapshot || [])]
-    .filter(m => m.role !== 'system' && !m.isRecalled)
+    .filter(isMemoryEligibleMessage)
     .slice(-4)
     .map(m => formatMessageForModel(m))
     .filter(Boolean)
@@ -153,10 +161,10 @@ export async function prefetchLongTermMemory({ personaId, messagesSnapshot }) {
 }
 
 export function buildMemoryExtractionItem(messagesSnapshot) {
-  const latestUserMsg = getLatestUserMessage(messagesSnapshot);
-  const history = (messagesSnapshot || [])
+  const eligibleMessages = (messagesSnapshot || []).filter(isMemoryEligibleMessage);
+  const latestUserMsg = getLatestUserMessage(eligibleMessages);
+  const history = eligibleMessages
     .slice(-IMMEDIATE_MEMORY_WINDOW)
-    .filter(m => m.role !== 'system' && !m.isRecalled)
     .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${formatMessageForModel(m)}`)
     .join('\n');
 
