@@ -1,3 +1,3 @@
 export const OFFICIAL_STICKER_SHEET_IMAGES = {
-  official_36: '/official-stickers/official_36.webp',
+  official_54: '/official-stickers/official_54.png',
 };
