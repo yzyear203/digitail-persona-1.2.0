@@ -52,6 +52,7 @@ import {
 } from './chatPageUtils/memory';
 
 const USER_SETTLE_DELAY_MS = 3000;
+const NUMBERED_DIALOGUE_WINDOW = 12;
 const DEBUG_FORCE_QUOTE_RECALL = false;
 const DEBUG_RECALL_FALLBACK_TEXT = '撤回测试：如果组件正常，这条会先打出来，然后变成撤回提示。';
 
@@ -96,6 +97,47 @@ function buildStickerContext(messages) {
     .filter(Boolean)
     .join('\n')
     .slice(-520);
+}
+
+function buildNumberedDialogueContext(messages) {
+  const quoteMap = {};
+  const counters = { user: 0, assistant: 0 };
+  const numberedMessages = (messages || [])
+    .filter(isNormalDialogueMessage)
+    .map(message => {
+      const text = formatMessageForModel(message).replace(/\s+/g, ' ').trim();
+      if (!text) return null;
+      if (message.role === 'user') {
+        counters.user += 1;
+        const ref = `U${counters.user}`;
+        quoteMap[ref] = text.slice(0, 120);
+        return { role: 'user', ref, text };
+      }
+      counters.assistant += 1;
+      return { role: 'assistant', ref: `A${counters.assistant}`, text };
+    })
+    .filter(Boolean)
+    .slice(-NUMBERED_DIALOGUE_WINDOW);
+
+  return { numberedMessages, quoteMap };
+}
+
+function buildNumberedDialogueBlock(numberedMessages) {
+  if (!numberedMessages?.length) return '';
+
+  return [
+    '【最近对话编号表】',
+    '下面编号只用于引用定位。需要引用用户原话时，只能输出 [quote_ref:U编号]，例如 [quote_ref:U3]。禁止输出 [quote:文本]，禁止编造引用。',
+    ...numberedMessages.map(message => `[${message.ref}] ${message.role === 'user' ? 'User' : 'Persona'}: ${message.text}`),
+  ].join('\n');
+}
+
+function resolveQuoteRefs(text, quoteMap) {
+  return String(text || '').replace(/\[quote_ref:\s*(U\d+)\s*\]/gi, (full, ref) => {
+    const quoteText = quoteMap?.[String(ref).toUpperCase()];
+    if (!quoteText) return '';
+    return `[quote: ${quoteText.slice(0, 80)}]`;
+  });
 }
 
 export default function ChatPage({ setAppPhase, messages, setMessages, activePersona, setActivePersona, showMsg, userProfile, user }) {
@@ -326,6 +368,8 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
       const personaId = getPersonaId(personaSnapshot);
       const responseMessages = messagesSnapshot || messagesRef.current;
       const normalMessages = responseMessages.filter(isNormalDialogueMessage);
+      const { numberedMessages, quoteMap } = buildNumberedDialogueContext(normalMessages);
+      const numberedDialogueBlock = buildNumberedDialogueBlock(numberedMessages);
       const { daysSinceLastChat, isCooling } = getPersonaConversationState(personaSnapshot);
       const hotT1 = getHotT1(personaId);
       const stickerContext = buildStickerContext(responseMessages);
@@ -345,7 +389,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
       if (generationNonce.current !== currentNonce) return;
 
       const responseText = await callDeepSeekAPI(
-        `${memoryPrefetchBlock ? `${memoryPrefetchBlock}\n\n` : ''}${hotTopics.promptBlock ? `${hotTopics.promptBlock}\n\n` : ''}对话历史:\n${chatHistoryStr}\n\nAssistant:`,
+        `${numberedDialogueBlock ? `${numberedDialogueBlock}\n\n` : ''}${memoryPrefetchBlock ? `${memoryPrefetchBlock}\n\n` : ''}${hotTopics.promptBlock ? `${hotTopics.promptBlock}\n\n` : ''}对话历史:\n${chatHistoryStr}\n\nAssistant:`,
         sysPrompt,
         'flash',
         controller.signal,
@@ -358,7 +402,7 @@ export default function ChatPage({ setAppPhase, messages, setMessages, activePer
         return;
       }
 
-      const rawReplyParts = splitAssistantReply(responseText);
+      const rawReplyParts = splitAssistantReply(resolveQuoteRefs(responseText, quoteMap));
       const normalizedReplyParts = DEBUG_FORCE_QUOTE_RECALL
         ? buildDebugQuoteRecallParts(rawReplyParts, normalMessages, DEBUG_RECALL_FALLBACK_TEXT)
         : rawReplyParts;
