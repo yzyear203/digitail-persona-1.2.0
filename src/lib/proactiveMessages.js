@@ -37,6 +37,22 @@ function dispatchProactiveNotice({ personaId, docs }) {
   }));
 }
 
+function buildProactiveBubble(doc) {
+  const text = String(doc.text || '').trim();
+  return {
+    id: doc.messageId || Date.now() + Math.floor(Math.random() * 10000),
+    role: 'assistant',
+    text,
+    time: normalizeTime(doc.createdAt),
+    createdAt: doc.createdAt || new Date().toISOString(),
+    isAnimated: false,
+    isProactive: true,
+    proactiveReason: doc.reason || '',
+    proactiveScene: doc.scene || '',
+    source: doc.source || 'persona_proactive_tick',
+  };
+}
+
 export async function fetchPendingProactiveMessages({ personaId, uid, limit = 8 } = {}) {
   if (!db || !personaId) return [];
 
@@ -60,14 +76,7 @@ export async function fetchPendingProactiveMessages({ personaId, uid, limit = 8 
       id: doc._id || doc.id,
       noticeText: String(doc.text || '').trim(),
       noticeTime: normalizeTime(doc.createdAt),
-      message: {
-        id: doc.messageId || Date.now() + Math.floor(Math.random() * 10000),
-        role: 'system',
-        text: '',
-        time: normalizeTime(doc.createdAt),
-        isProactive: true,
-        proactiveReason: doc.reason || '',
-      },
+      message: buildProactiveBubble(doc),
     }));
   } catch (error) {
     console.warn('拉取 Persona 主动消息失败:', error);
@@ -87,7 +96,8 @@ export async function markProactiveMessagesConsumed(messageDocs = []) {
 }
 
 export async function clearProactivePendingFlag(persona) {
-  if (!db || !persona?.id) return null;
+  const personaId = persona?._id || persona?.id;
+  if (!db || !personaId) return null;
 
   try {
     const t3 = JSON.parse(persona.content || '{}');
@@ -101,7 +111,7 @@ export async function clearProactivePendingFlag(persona) {
     };
 
     const nextContent = JSON.stringify(t3);
-    await db.collection('personas').doc(persona.id).update({ content: nextContent, updatedAt: Date.now() });
+    await db.collection('personas').doc(personaId).update({ content: nextContent, updatedAt: Date.now() });
     return nextContent;
   } catch (error) {
     console.warn('清除主动消息待回复标记失败:', error);
