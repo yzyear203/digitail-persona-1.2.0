@@ -1,8 +1,9 @@
 import { OFFICIAL_STICKER_CATALOG, OFFICIAL_STICKER_SHEETS, getOfficialStickerKeywordPresets } from './officialStickerCatalog';
 import { OFFICIAL_STICKER_SHEET_IMAGES } from './officialStickerAssets';
 
-const CACHE_KEY = 'digitail_official_sticker_market_v2';
+const CACHE_KEY = 'digitail_official_sticker_market_v3';
 const SHEET_META = Object.fromEntries(OFFICIAL_STICKER_SHEETS.map(sheet => [sheet.id, sheet]));
+const CURRENT_PACK_IDS = OFFICIAL_STICKER_SHEETS.map(sheet => sheet.id);
 
 function normalizeSearchText(value) {
   return String(value || '')
@@ -86,20 +87,31 @@ function normalizePack(sheet) {
 const MARKET_PACKS = OFFICIAL_STICKER_SHEETS.map(normalizePack);
 const ALL_STICKERS = MARKET_PACKS.flatMap(pack => pack.stickers);
 
+function normalizeInstalledPackIds(packIds) {
+  if (!Array.isArray(packIds)) return CURRENT_PACK_IDS;
+  const installedCurrentIds = packIds.filter(packId => CURRENT_PACK_IDS.includes(packId));
+  return installedCurrentIds.length > 0 ? installedCurrentIds : CURRENT_PACK_IDS;
+}
+
 function readInstalledPackIds() {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
     const parsed = raw ? JSON.parse(raw) : null;
-    if (Array.isArray(parsed?.installedPackIds)) return parsed.installedPackIds;
+    const normalizedIds = normalizeInstalledPackIds(parsed?.installedPackIds);
+    if (!parsed || JSON.stringify(parsed.installedPackIds) !== JSON.stringify(normalizedIds)) {
+      writeInstalledPackIds(normalizedIds);
+    }
+    return normalizedIds;
   } catch {
     // ignore cache errors
   }
-  return MARKET_PACKS.map(pack => pack.id);
+  return CURRENT_PACK_IDS;
 }
 
 function writeInstalledPackIds(packIds) {
   try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify({ installedPackIds: packIds }));
+    const normalizedIds = normalizeInstalledPackIds(packIds);
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ installedPackIds: normalizedIds, version: 3 }));
   } catch (error) {
     console.warn('官方表情包安装状态保存失败:', error);
   }
@@ -206,8 +218,8 @@ export async function findStickerByKeyword(keyword = '') {
   return pickRandom(getInstalledStickers());
 }
 
-export function getStickerKeywordPresets() {
-  return getOfficialStickerKeywordPresets();
+export function getStickerKeywordPresets(contextText = '', limit = 24) {
+  return getOfficialStickerKeywordPresets(contextText, limit);
 }
 
 export function getAllOfficialStickers() {
