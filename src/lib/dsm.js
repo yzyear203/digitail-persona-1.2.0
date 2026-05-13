@@ -80,7 +80,7 @@ function formatInteractionStyleBlock(t3) {
     '【引用与撤回】',
     `引用倾向：${style.quote_tendency || 'medium'}${quoteTriggers.length ? `；触发：${quoteTriggers.join(' / ')}` : ''}`,
     `撤回倾向：${style.recall_tendency || 'low'}${recallTriggers.length ? `；触发：${recallTriggers.join(' / ')}` : ''}`,
-    '可自然用 [quote:用户原话短片段] 接住重点；可偶尔用 <recall>...</recall> 表现发出后后悔，不要机械展示。',
+    '引用必须使用编号格式 [quote_ref:U编号]，例如 [quote_ref:U3]；禁止输出 [quote:文本]，禁止自己编写或截取引用文本。可偶尔用 <recall>...</recall> 表现撤回，不要机械展示。',
   ].join('\n');
 }
 
@@ -150,7 +150,7 @@ export const MEMORY_PREFETCH_INSTRUCTION = `
 `;
 
 export const NATURAL_REPLY_GUARD = `
-【自然回复节奏】允许符合人格的口头禅、调侃、反问和情绪铺垫。超过2句话或两个独立信息点必须用 ||| 拆成聊天气泡；每个气泡只承载一个情绪/信息点。可用 [quote:用户原话短片段] 回应重点；可偶尔用 <recall>...</recall> 表现撤回，不要连续撤回。
+【自然回复节奏】允许符合人格的口头禅、调侃、反问和情绪铺垫。超过2句话或两个独立信息点必须用 ||| 拆成聊天气泡；每个气泡只承载一个情绪/信息点。需要引用时，只能使用 [quote_ref:U编号]；禁止输出 [quote:文本]，禁止编造或截取引用文本。可偶尔用 <recall>...</recall> 表现撤回，不要连续撤回。
 `;
 
 export function getDaysSince(dateString, now = Date.now()) {
@@ -286,12 +286,12 @@ function isStructuredOrCodeReply(text) {
 }
 
 function hasOnlyControlMarker(text) {
-  return !text.replace(/<\/?recall>|\[quote:.*?\]|<del>[\s\S]*?<\/del>/g, '').trim();
+  return !text.replace(/<\/?recall>|\[quote_ref:.*?\]|\[quote:.*?\]|<del>[\s\S]*?<\/del>/g, '').trim();
 }
 
 function protectControlSpans(text) {
   const spans = [];
-  const protectedText = text.replace(/<del>[\s\S]*?<\/del>|<recall>[\s\S]*?<\/recall>|\[quote:[\s\S]*?\]/g, span => {
+  const protectedText = text.replace(/<del>[\s\S]*?<\/del>|<recall>[\s\S]*?<\/recall>|\[quote_ref:[\s\S]*?\]|\[quote:[\s\S]*?\]/g, span => {
     const token = `@@DSM_CTRL_${spans.length}@@`;
     spans.push(span);
     return token;
