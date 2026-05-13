@@ -1,6 +1,6 @@
 import { getMessagePlainText } from '../../../lib/stickerMessage';
 
-export const CONTROL_MARKER_REGEX = /<del>[\s\S]*?<\/del>|<\/?recall>|\[recall[:：][\s\S]*?\]|\[quote:[\s\S]*?\]/g;
+export const CONTROL_MARKER_REGEX = /<del>[\s\S]*?<\/del>|<\/?recall>|\[recall[:：][\s\S]*?\]|\[quote_ref:[\s\S]*?\]|\[quote:[\s\S]*?\]/g;
 
 export function normalizeControlMarkers(text) {
   return String(text || '')
