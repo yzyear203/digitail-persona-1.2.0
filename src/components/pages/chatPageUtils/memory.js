@@ -1,4 +1,5 @@
 import { db } from '../../../lib/cloudbase';
+import { upsertPersonaProfile } from '../../../lib/profileStore';
 import {
   hasContentSignal,
   normalizeMemoryRecord,
@@ -32,6 +33,30 @@ function parsePersonaContent(persona) {
   } catch (_) {
     return {};
   }
+}
+
+function parseDateMs(value) {
+  if (!value) return 0;
+  if (typeof value === 'number') return value;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value?.getTime === 'function') return value.getTime();
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function isExpiredMemory(memory, now = Date.now()) {
+  const expiresAt = parseDateMs(memory?.expires_at || memory?.expiresAt);
+  return Boolean(expiresAt && expiresAt <= now);
+}
+
+function isActiveMemory(memory) {
+  return Boolean(memory?.content)
+    && !isExpiredMemory(memory)
+    && !memory?.archived
+    && !memory?.is_archived
+    && !memory?.absorbed_by_t3
+    && !memory?.absorbedAt
+    && memory?.memory_type !== 'debug_noise';
 }
 
 function normalizeMemoryTriggerText(value) {
@@ -92,6 +117,57 @@ function matchPersonaMemoryStyle(text, persona) {
   return false;
 }
 
+function normalizeStableValue(value, max = 32) {
+  return String(value || '')
+    .replace(/[“”"'`]/g, '')
+    .replace(/[，。,.!！?？；;：:、\s]+$/g, '')
+    .trim()
+    .slice(0, max);
+}
+
+function extractStableProfileSignals(t1Event) {
+  const summary = String(t1Event?.summary || '').trim();
+  const signals = {};
+  if (!summary) return signals;
+
+  const name = summary.match(/(?:用户(?:说|表示|透露|明确)?(?:自己)?(?:叫|名字是|名叫)|用户称呼[:：]|称呼[:：])([\u4e00-\u9fa5A-Za-z0-9_·•]{1,16})/)?.[1]
+    || summary.match(/(?:我叫|叫我|我的名字是|我名字叫)([\u4e00-\u9fa5A-Za-z0-9_·•]{1,16})/)?.[1];
+  if (name) signals.userName = normalizeStableValue(name, 16);
+
+  const identity = summary.match(/用户(?:透露|表示|说|明确)?(?:自己)?是([^，。,.；;]{2,42})/)?.[1]
+    || summary.match(/用户身份(?:是|为|：|:)([^，。,.；;]{2,42})/)?.[1];
+  if (identity && !/这个|那个|有人|东西|情况|问题/.test(identity)) {
+    signals.identity = normalizeStableValue(identity, 42);
+  }
+
+  const interest = summary.match(/用户(?:喜欢|偏好|爱好|感兴趣于)([^，。,.；;]{2,28})/)?.[1];
+  if (interest) signals.interest = normalizeStableValue(interest, 28);
+
+  return signals;
+}
+
+function mergeInterest(t3, topic, sourceEventId) {
+  if (!topic) return false;
+  const interests = Array.isArray(t3.interests) ? [...t3.interests] : [];
+  const existing = interests.find(item => item.topic === topic);
+  if (existing) {
+    existing.weight = Math.min(10, Number(existing.weight || 1) + 1);
+    existing.confidence = existing.confidence === 'high' ? 'high' : 'medium';
+    existing.last_updated = new Date().toISOString();
+    return true;
+  }
+
+  interests.push({
+    topic,
+    weight: 2,
+    confidence: 'medium',
+    last_updated: new Date().toISOString(),
+    source_event_ids: sourceEventId ? [sourceEventId] : [],
+  });
+  t3.interests = interests.slice(-12);
+  return true;
+}
+
 export function getBatchMinItemsForPersona(persona) {
   const { batchTendency } = getPersonaMemoryStyle(persona);
   if (batchTendency === 'sensitive') return 2;
@@ -143,7 +219,7 @@ export async function prefetchLongTermMemory({ personaId, messagesSnapshot }) {
 
     const scored = (queryRes.data || [])
       .map(normalizeMemoryRecord)
-      .filter(memory => memory.content)
+      .filter(isActiveMemory)
       .map(memory => ({ ...memory, keywordScore: estimateKeywordScore(memory.content, query) }))
       .sort((a, b) => b.keywordScore - a.keywordScore);
 
@@ -186,6 +262,7 @@ export function buildMemoryExtractionPrompt(historyForExtraction) {
   return `分析以下最新对话片段，提取极具价值的增量记忆。
 这些片段可能来自同一段连续聊天，请尽量合并成一条更完整的事件记忆，避免碎片化。
 严禁提取无意义的日常，必须以第三人称陈述。
+如果用户明确声明姓名、身份、长期偏好，请在 summary 中保留可被规则识别的表达，例如“用户叫XXX”“用户是XXX”“用户喜欢XXX”。
 重要性打分规则：日常小事0-3，明确计划4-7，重大节点或重要状态变化8-10。
 严格按下方JSON输出，不要包含markdown格式：
 { "importance": 9, "summary": "用户今天拿到了重要结果", "emotion": "excited", "confidence": "high" }
@@ -203,6 +280,48 @@ export function createMemoryRecord({ personaId, t1Event }) {
     t1Event,
     deviceFp: navigator.userAgent.substring(0, 64),
   });
+}
+
+export async function promoteStableMemoryToT3({ personaId, persona, t1Event }) {
+  if (!db || !personaId || !persona || !t1Event?.summary) return { promoted: false };
+  const signals = extractStableProfileSignals(t1Event);
+  if (!signals.userName && !signals.identity && !signals.interest) return { promoted: false };
+
+  const t3 = parsePersonaContent(persona);
+  const nowIso = new Date().toISOString();
+  const eventId = t1Event.event_id || t1Event.eventId || '';
+  const promoted = [];
+
+  if (signals.userName && t3.user_name !== signals.userName) {
+    t3.user_name = signals.userName;
+    promoted.push('user_name');
+  }
+
+  if (signals.identity) {
+    const currentIdentity = t3.identity?.value || '';
+    if (!currentIdentity || currentIdentity.length < signals.identity.length || currentIdentity.includes('用户称呼')) {
+      t3.identity = {
+        ...(t3.identity || {}),
+        value: signals.identity,
+        confidence: 'high',
+        last_updated: nowIso,
+        source_event_ids: Array.from(new Set([...(t3.identity?.source_event_ids || []), eventId].filter(Boolean))).slice(-8),
+      };
+      promoted.push('identity');
+    }
+  }
+
+  if (signals.interest && mergeInterest(t3, signals.interest, eventId)) {
+    promoted.push('interest');
+  }
+
+  if (!promoted.length) return { promoted: false };
+
+  const nextContent = JSON.stringify(t3);
+  await db.collection('personas').doc(personaId).update({ content: nextContent, updatedAt: Date.now() });
+  await upsertPersonaProfile({ personaId, t3Profile: t3 });
+
+  return { promoted: true, promotedFields: promoted, t3, content: nextContent };
 }
 
 export async function writeMemoryThroughVectorize({ personaId, memoryRecord }) {
