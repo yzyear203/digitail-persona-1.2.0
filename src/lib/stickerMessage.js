@@ -1,7 +1,7 @@
 import { findStickerByKeyword } from './officialStickerStore';
 
-const STICKER_MARKER_REGEX = /^\s*\[sticker\s*:\s*([^\]]+?)\s*\]\s*$/i;
-const INLINE_STICKER_REGEX = /\[sticker\s*:\s*([^\]]+?)\s*\]/gi;
+const STICKER_MARKER_REGEX = /^\s*\[(?:sticker|表情包)\s*[:：]\s*([^\]]+?)\s*\]\s*$/i;
+const INLINE_STICKER_REGEX = /\[(?:sticker|表情包)\s*[:：]\s*([^\]]+?)\s*\]/gi;
 
 export function isStickerMarker(text) {
   return STICKER_MARKER_REGEX.test(String(text || ''));
