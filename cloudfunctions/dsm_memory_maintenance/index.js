@@ -2,9 +2,9 @@ const cloudbase = require('@cloudbase/node-sdk');
 
 const app = cloudbase.init({ env: cloudbase.SYMBOL_CURRENT_ENV });
 const db = app.database();
-const _ = db.command;
 
 const DEFAULT_LIMIT = 200;
+const DEFAULT_PERSONA_SCAN_LIMIT = 50;
 const HIGH_VALUE_IMPORTANCE = 8;
 const IDENTITY_MIN_SUPPORT = 2;
 const INTEREST_MIN_SUPPORT = 2;
@@ -239,6 +239,16 @@ async function fetchPersona(personaId) {
   return data || null;
 }
 
+async function fetchPersonaIdsForScheduledScan(limit) {
+  const res = await db.collection('personas')
+    .orderBy('updatedAt', 'desc')
+    .limit(limit)
+    .get();
+  return (res.data || [])
+    .map(item => item._id || item.id)
+    .filter(Boolean);
+}
+
 function shouldArchive(memory, now) {
   if (memory.archived || memory.is_archived) return false;
   if (memory.promoted_to_t3) return ARCHIVE_AFTER_PROMOTION;
@@ -257,7 +267,8 @@ async function updateMemoryDoc(memory, patch) {
 
 exports.main = async (event = {}) => {
   const limit = Math.min(Number(event.limit || DEFAULT_LIMIT), 500);
-  const personaIds = Array.isArray(event.personaIds)
+  const personaScanLimit = Math.min(Number(event.personaScanLimit || DEFAULT_PERSONA_SCAN_LIMIT), 100);
+  let personaIds = Array.isArray(event.personaIds)
     ? event.personaIds.filter(Boolean)
     : (event.personaId ? [event.personaId] : []);
 
@@ -267,11 +278,17 @@ exports.main = async (event = {}) => {
     archived: 0,
     deleted: 0,
     conflicts: 0,
+    scheduledScan: false,
     updatedPersonaIds: [],
   };
 
   if (!personaIds.length) {
-    return { success: false, error: '缺少 personaId/personaIds，第一版维护函数不做全库无差别扫描。', ...stats };
+    personaIds = await fetchPersonaIdsForScheduledScan(personaScanLimit);
+    stats.scheduledScan = true;
+  }
+
+  if (!personaIds.length) {
+    return { success: true, message: '没有找到需要维护的 Persona。', ...stats };
   }
 
   for (const personaId of personaIds) {
