@@ -13,6 +13,7 @@ export const MEMORY_BATCH_MIN_ITEMS = 3;
 export const MEMORY_BATCH_MAX_WAIT_MS = 3 * 60 * 1000;
 
 const MEMORY_PREFETCH_REGEX = /(还记得|记不记得|之前|上次|以前|我说过|你记得|记得我|我的计划|我的名字|我叫什么|医院|学校|大学|公司|offer|录取|考试|项目|家教|实习|面试|旅行|旅游|分手|失恋|离职|搬家)/i;
+const T3_PRIORITY_QUERY_REGEX = /(我叫什么|我的名字|我是谁|我是干嘛|我是做什么|我的身份|你记得我吗|记得我是谁|记得我是干嘛的吗)/i;
 const BASE_HIGH_VALUE_MEMORY_REGEX = /(我叫|叫我|我的名字是|我名字叫|本人叫|录取|offer|Offer|离职|失业|分手|失恋|生病|手术|怀孕|搬家|转专业|确诊|复查|面试|签约)/i;
 const GENERIC_MEMORY_STOPWORDS = new Set([
   '用户', '提到', '明确', '重要', '长期', '计划', '变化', '结果', '进展', '困难', '相关', '值得',
@@ -49,6 +50,10 @@ function isExpiredMemory(memory, now = Date.now()) {
   return Boolean(expiresAt && expiresAt <= now);
 }
 
+function isHighValueMemory(memory) {
+  return Number(memory?.importance_score || memory?.importance || 0) >= 8;
+}
+
 function isActiveMemory(memory) {
   return Boolean(memory?.content)
     && !isExpiredMemory(memory)
@@ -56,7 +61,14 @@ function isActiveMemory(memory) {
     && !memory?.is_archived
     && !memory?.absorbed_by_t3
     && !memory?.absorbedAt
+    && !(memory?.promoted_to_t3 && !isHighValueMemory(memory))
     && memory?.memory_type !== 'debug_noise';
+}
+
+function buildT3PriorityHint(messagesSnapshot) {
+  const latestUserText = formatMessageForModel(getLatestUserMessage(messagesSnapshot));
+  if (!T3_PRIORITY_QUERY_REGEX.test(latestUserText)) return '';
+  return '【T3优先提醒】用户正在询问姓名、身份或“你是否记得我”。请优先依据系统提示中的[用户档案]/T3回答；下面的T1长期记忆只能作为补充，不能覆盖T3。';
 }
 
 function normalizeMemoryTriggerText(value) {
@@ -197,10 +209,11 @@ export function buildMemoryQuery(messagesSnapshot) {
 }
 
 export async function prefetchLongTermMemory({ personaId, messagesSnapshot }) {
-  if (!db || !personaId || !shouldPrefetchLongTermMemory(messagesSnapshot)) return '';
+  const t3PriorityHint = buildT3PriorityHint(messagesSnapshot);
+  if (!db || !personaId || !shouldPrefetchLongTermMemory(messagesSnapshot)) return t3PriorityHint;
 
   const query = buildMemoryQuery(messagesSnapshot);
-  if (!query) return '';
+  if (!query) return t3PriorityHint;
 
   try {
     let queryRes = await db.collection('persona_memories')
@@ -227,12 +240,12 @@ export async function prefetchLongTermMemory({ personaId, messagesSnapshot }) {
     const fallback = MEMORY_PREFETCH_REGEX.test(query) ? scored.slice(0, 2) : [];
     const finalMemories = matched.length ? matched : fallback;
 
-    if (!finalMemories.length) return '';
+    if (!finalMemories.length) return t3PriorityHint;
 
-    return `【可能相关的长期记忆】\n${finalMemories.map(memory => `- ${memory.content}`).join('\n')}\n请只在自然相关时使用这些记忆，不要生硬复述。`;
+    return `${t3PriorityHint ? `${t3PriorityHint}\n` : ''}【可能相关的长期记忆】\n${finalMemories.map(memory => `- ${memory.content}`).join('\n')}\n请只在自然相关时使用这些记忆，不要生硬复述；若与T3档案冲突，以T3为准。`;
   } catch (error) {
     console.warn('长期记忆预取失败，跳过一跳式回源:', error);
-    return '';
+    return t3PriorityHint;
   }
 }
 
