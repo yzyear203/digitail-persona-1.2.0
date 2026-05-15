@@ -46,6 +46,14 @@ function parseDateMs(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function sortMemoriesByTimeDesc(memories) {
+  return [...(memories || [])].sort((a, b) => {
+    const bTime = parseDateMs(b?.timestamp || b?.createTime || b?.updateTime);
+    const aTime = parseDateMs(a?.timestamp || a?.createTime || a?.updateTime);
+    return bTime - aTime;
+  });
+}
+
 function isExpiredMemory(memory, now = Date.now()) {
   const expiresAt = parseDateMs(memory?.expires_at || memory?.expiresAt);
   return Boolean(expiresAt && expiresAt <= now);
@@ -103,23 +111,15 @@ function isLegacyUnscopedMemory(memory) {
     && !memory?.is_archived;
 }
 
-async function fetchLegacyMemoryCandidates(limit = 50) {
+async function fetchLegacyMemoryCandidates(limit = 100) {
   try {
     const res = await db.collection('persona_memories')
-      .orderBy('createTime', 'desc')
       .limit(limit)
       .get();
-    return res.data || [];
-  } catch (createTimeError) {
-    try {
-      const res = await db.collection('persona_memories')
-        .limit(limit)
-        .get();
-      return res.data || [];
-    } catch (fallbackError) {
-      console.warn('旧版未绑定 T1 回源失败:', fallbackError);
-      return [];
-    }
+    return sortMemoriesByTimeDesc(res.data || []);
+  } catch (fallbackError) {
+    console.warn('旧版未绑定 T1 回源失败:', fallbackError);
+    return [];
   }
 }
 
@@ -163,7 +163,7 @@ async function fetchCandidateMemories(personaId, includeLegacyFallback = false) 
   }
 
   if (includeLegacyFallback) {
-    const legacyCandidates = await fetchLegacyMemoryCandidates(80);
+    const legacyCandidates = await fetchLegacyMemoryCandidates(100);
     const legacyMemories = legacyCandidates.filter(isLegacyUnscopedMemory).slice(0, 20);
     batches.push(...legacyMemories);
     legacyMemories.slice(0, 8).forEach(memory => backfillLegacyMemoryPersonaId(memory, personaId));
