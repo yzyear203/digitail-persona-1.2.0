@@ -1,5 +1,6 @@
 const RUNTIME_STATUS_STORAGE_PREFIX = 'persona_runtime_status_';
 const STATUS_MARKER_REGEX = /\[status:\s*(\{[\s\S]*?\})\]/gi;
+const MIN_REFRESH_INTERVAL_MS = 8 * 60 * 1000;
 
 const FALLBACK_STATUS = {
   label: '待唤醒',
@@ -58,6 +59,11 @@ function buildExpiresAt(source = {}) {
 
 function getStorageKey(personaId) {
   return `${RUNTIME_STATUS_STORAGE_PREFIX}${personaId}`;
+}
+
+function getUpdatedAtMs(status) {
+  const updatedAt = new Date(status?.updated_at || status?.updatedAt || '').getTime();
+  return Number.isFinite(updatedAt) ? updatedAt : 0;
 }
 
 export function getPersonaRuntimeStatusId(persona) {
@@ -120,8 +126,17 @@ export function readRuntimeStatus(personaId) {
   }
 }
 
-export function shouldRefreshRuntimeStatus() {
-  return false;
+export function shouldRefreshRuntimeStatus(personaId, now = Date.now()) {
+  if (!personaId || personaId === 'default') return false;
+
+  const current = readRuntimeStatus(personaId);
+  if (!current) return true;
+  if (isRuntimeStatusExpired(current, now)) return true;
+
+  const updatedAt = getUpdatedAtMs(current);
+  if (!updatedAt) return true;
+
+  return now - updatedAt >= MIN_REFRESH_INTERVAL_MS && getRuntimeStatusRemainingMs(current, now) <= 0;
 }
 
 export function persistRuntimeStatus(personaId, status) {
