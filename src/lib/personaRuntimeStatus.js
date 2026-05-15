@@ -1,6 +1,6 @@
 const RUNTIME_STATUS_STORAGE_PREFIX = 'persona_runtime_status_';
+const RUNTIME_SCHEDULE_STORAGE_PREFIX = 'persona_runtime_schedule_';
 const STATUS_MARKER_REGEX = /\[status:\s*(\{[\s\S]*?\})\]/gi;
-const MIN_REFRESH_INTERVAL_MS = 8 * 60 * 1000;
 
 const FALLBACK_STATUS = {
   label: '待唤醒',
@@ -17,6 +17,81 @@ const FALLBACK_STATUS = {
 };
 
 const COLOR_SET = new Set(['red', 'orange', 'yellow', 'green', 'blue', 'purple', 'pink', 'slate']);
+
+const DAILY_SEGMENT_TEMPLATES = [
+  {
+    start: 0,
+    end: 420,
+    label: '睡觉中',
+    color: 'slate',
+    base_mood: '困倦',
+    activities: ['窝在被子里睡觉', '半梦半醒地补觉', '手机丢在一边睡着了'],
+  },
+  {
+    start: 420,
+    end: 540,
+    label: '醒神中',
+    color: 'blue',
+    base_mood: '迷糊',
+    activities: ['刚醒，边喝水边缓慢开机', '洗漱完在窗边醒神', '一边找东西一边整理今天的状态'],
+  },
+  {
+    start: 540,
+    end: 690,
+    label: '赶路中',
+    color: 'orange',
+    base_mood: '清醒',
+    activities: ['带着耳机赶路，顺手看两眼消息', '在路上晃着，脑子慢慢转起来', '边走边想今天要处理的事'],
+  },
+  {
+    start: 690,
+    end: 780,
+    label: '专注中',
+    color: 'green',
+    base_mood: '专注',
+    activities: ['坐下来处理正事，桌面有点乱', '盯着屏幕把手头的事往前推', '进入工作状态，偶尔看一眼消息'],
+  },
+  {
+    start: 780,
+    end: 870,
+    label: '吃饭中',
+    color: 'yellow',
+    base_mood: '松弛',
+    activities: ['吃饭时刷着手机，整个人松下来一点', '在吃东西补能量，脑子短暂放空', '边吃边看外面的动静'],
+  },
+  {
+    start: 870,
+    end: 1080,
+    label: '忙碌中',
+    color: 'purple',
+    base_mood: '认真',
+    activities: ['下午继续处理事情，状态还算在线', '在一堆小任务里来回切换', '一边整理思路一边推进今天的安排'],
+  },
+  {
+    start: 1080,
+    end: 1230,
+    label: '放空中',
+    color: 'pink',
+    base_mood: '散漫',
+    activities: ['傍晚有点放空，靠着椅背回神', '把事情暂时放下，在慢慢回血', '刷到一点新鲜事，心情轻了一点'],
+  },
+  {
+    start: 1230,
+    end: 1380,
+    label: '摸鱼中',
+    color: 'green',
+    base_mood: '松弛',
+    activities: ['晚上窝着刷手机，顺手回消息', '靠在一边摸鱼，整个人没那么紧绷', '慢悠悠处理零碎事情，心情比较软'],
+  },
+  {
+    start: 1380,
+    end: 1440,
+    label: '准备睡',
+    color: 'slate',
+    base_mood: '困倦',
+    activities: ['准备睡了，但还在看最后几眼手机', '灯光暗下来，脑子开始降速', '把今天收尾，慢慢进入睡前状态'],
+  },
+];
 
 function compactText(value, maxChars) {
   return String(value || '')
@@ -61,9 +136,139 @@ function getStorageKey(personaId) {
   return `${RUNTIME_STATUS_STORAGE_PREFIX}${personaId}`;
 }
 
+function getScheduleStorageKey(personaId, dateKey) {
+  return `${RUNTIME_SCHEDULE_STORAGE_PREFIX}${personaId}_${dateKey}`;
+}
+
+function getLocalDateKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function getMinuteOfDay(date = new Date()) {
+  return date.getHours() * 60 + date.getMinutes();
+}
+
+function localDateAtMinute(dateKey, minuteOfDay) {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  const date = new Date(year, month - 1, day, 0, 0, 0, 0);
+  date.setMinutes(minuteOfDay);
+  return date;
+}
+
+function hashString(value) {
+  const source = String(value || '');
+  let hash = 2166136261;
+  for (let i = 0; i < source.length; i += 1) {
+    hash ^= source.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function pickSeeded(items, seed) {
+  if (!items?.length) return '';
+  return items[seed % items.length];
+}
+
 function getUpdatedAtMs(status) {
   const updatedAt = new Date(status?.updated_at || status?.updatedAt || '').getTime();
   return Number.isFinite(updatedAt) ? updatedAt : 0;
+}
+
+function buildScheduleStatus({ personaId, dateKey, template, index, now = new Date() }) {
+  const seed = hashString(`${personaId}_${dateKey}_${index}_${template.label}`);
+  const activity = pickSeeded(template.activities, seed);
+  const startAt = localDateAtMinute(dateKey, template.start);
+  const endAt = localDateAtMinute(dateKey, template.end);
+
+  return normalizeRuntimeStatus({
+    personaId,
+    label: template.label,
+    activity,
+    color: template.color,
+    base_mood: template.base_mood,
+    chat_mood: template.base_mood,
+    emotional_shift: '按当日生活轨迹自然推进',
+    duration_minutes: Math.max(1, template.end - template.start),
+    updated_at: startAt.toISOString(),
+    expires_at: endAt.toISOString(),
+    source: 'daily_schedule',
+    schedule_date: dateKey,
+    schedule_index: index,
+  });
+}
+
+function generateDailyRuntimeSchedule(persona, now = new Date()) {
+  const personaId = getPersonaRuntimeStatusId(persona);
+  const dateKey = getLocalDateKey(now);
+
+  return {
+    personaId,
+    dateKey,
+    created_at: new Date().toISOString(),
+    source: 'local_daily_schedule',
+    items: DAILY_SEGMENT_TEMPLATES.map((template, index) => buildScheduleStatus({
+      personaId,
+      dateKey,
+      template,
+      index,
+      now,
+    })),
+  };
+}
+
+function readDailyRuntimeSchedule(personaId, dateKey) {
+  if (typeof localStorage === 'undefined' || !personaId || !dateKey) return null;
+  try {
+    const raw = localStorage.getItem(getScheduleStorageKey(personaId, dateKey));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed?.dateKey !== dateKey || !Array.isArray(parsed.items)) return null;
+    return parsed;
+  } catch (error) {
+    console.warn('读取 Persona 当日状态日程失败:', error);
+    return null;
+  }
+}
+
+function persistDailyRuntimeSchedule(schedule) {
+  if (typeof localStorage === 'undefined' || !schedule?.personaId || !schedule?.dateKey) return null;
+  try {
+    localStorage.setItem(getScheduleStorageKey(schedule.personaId, schedule.dateKey), JSON.stringify(schedule));
+  } catch (error) {
+    console.warn('保存 Persona 当日状态日程失败:', error);
+  }
+  return schedule;
+}
+
+function ensureDailyRuntimeSchedule(persona, now = new Date()) {
+  const personaId = getPersonaRuntimeStatusId(persona);
+  const dateKey = getLocalDateKey(now);
+  if (!personaId) return null;
+
+  const existing = readDailyRuntimeSchedule(personaId, dateKey);
+  if (existing) return existing;
+
+  return persistDailyRuntimeSchedule(generateDailyRuntimeSchedule(persona, now));
+}
+
+function getCurrentStatusFromSchedule(schedule, now = new Date()) {
+  if (!schedule?.items?.length) return null;
+  const minute = getMinuteOfDay(now);
+  const current = schedule.items.find(item => {
+    const start = Number(item.schedule_index) >= 0 ? DAILY_SEGMENT_TEMPLATES[item.schedule_index]?.start : null;
+    const end = Number(item.schedule_index) >= 0 ? DAILY_SEGMENT_TEMPLATES[item.schedule_index]?.end : null;
+    return Number.isFinite(start) && Number.isFinite(end) && minute >= start && minute < end;
+  }) || schedule.items[schedule.items.length - 1];
+
+  return normalizeRuntimeStatus(current);
+}
+
+function isManualRuntimeStatus(status) {
+  return status && status.source && status.source !== 'daily_schedule' && status.source !== 'fallback';
 }
 
 export function getPersonaRuntimeStatusId(persona) {
@@ -126,17 +331,8 @@ export function readRuntimeStatus(personaId) {
   }
 }
 
-export function shouldRefreshRuntimeStatus(personaId, now = Date.now()) {
-  if (!personaId || personaId === 'default') return false;
-
-  const current = readRuntimeStatus(personaId);
-  if (!current) return true;
-  if (isRuntimeStatusExpired(current, now)) return true;
-
-  const updatedAt = getUpdatedAtMs(current);
-  if (!updatedAt) return true;
-
-  return now - updatedAt >= MIN_REFRESH_INTERVAL_MS && getRuntimeStatusRemainingMs(current, now) <= 0;
+export function shouldRefreshRuntimeStatus() {
+  return false;
 }
 
 export function persistRuntimeStatus(personaId, status) {
@@ -188,13 +384,21 @@ export function getRuntimeStatusFromT3(t3Content) {
   return null;
 }
 
+export function getDailyRuntimeSchedule(persona, now = new Date()) {
+  return ensureDailyRuntimeSchedule(persona, now);
+}
+
 export function getDisplayRuntimeStatus(persona) {
   const personaId = getPersonaRuntimeStatusId(persona);
   const storedStatus = readRuntimeStatus(personaId);
-  if (storedStatus) return storedStatus;
+  if (isManualRuntimeStatus(storedStatus)) return storedStatus;
 
   const t3Status = getRuntimeStatusFromT3(persona?.content);
-  if (t3Status) return t3Status;
+  if (isManualRuntimeStatus(t3Status)) return t3Status;
+
+  const schedule = ensureDailyRuntimeSchedule(persona);
+  const scheduleStatus = getCurrentStatusFromSchedule(schedule);
+  if (scheduleStatus) return scheduleStatus;
 
   return { ...FALLBACK_STATUS, updated_at: new Date().toISOString() };
 }
