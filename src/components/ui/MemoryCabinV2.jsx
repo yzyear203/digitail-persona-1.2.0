@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { BrainCircuit, Clock3, DatabaseZap, Loader2, MessageSquareX, Save, UserPen, X } from 'lucide-react';
-import { db } from '../../lib/cloudbase';
+import { BrainCircuit, Clock3, DatabaseZap, Loader2, MessageSquareX, RefreshCw, Save, UserPen, X } from 'lucide-react';
+import { cloudbase, db } from '../../lib/cloudbase';
 import { upsertPersonaProfile } from '../../lib/profileStore';
 import { formatRuntimeStatusRemaining, getDisplayRuntimeStatus, getPersonaRuntimeStatusId } from '../../lib/personaRuntimeStatus';
 
@@ -55,6 +55,7 @@ function formatWakeTime(status) {
 
 export default function MemoryCabinV2({ activePersona, setActivePersona, showMsg, onClose, onClearChatHistory }) {
   const [isSaving, setIsSaving] = useState(false);
+  const [isMaintaining, setIsMaintaining] = useState(false);
   const [personaName, setPersonaName] = useState(activePersona?.name || '');
   const [t3Data, setT3Data] = useState(() => parseT3Content(activePersona?.content));
   const [runtimeStatus, setRuntimeStatus] = useState(() => getDisplayRuntimeStatus(activePersona));
@@ -151,6 +152,47 @@ export default function MemoryCabinV2({ activePersona, setActivePersona, showMsg
     }
   };
 
+  const runMemoryMaintenance = async () => {
+    const persona = latestPersonaRef.current || activePersona;
+    const personaId = getPersonaDocId(persona);
+    if (!personaId) {
+      showMsg('❌ 维护失败: 当前 Persona 缺少 TCB 文档 ID');
+      return;
+    }
+    if (!cloudbase || !db) {
+      showMsg('❌ 维护失败: CloudBase 未初始化');
+      return;
+    }
+
+    setIsMaintaining(true);
+    try {
+      const res = await cloudbase.callFunction({
+        name: 'dsm_memory_maintenance',
+        data: { personaId, limit: 200 },
+        timeout: 30000,
+      });
+      if (res.result?.success === false) throw new Error(res.result.error || '云函数返回失败');
+
+      const verifyRes = await db.collection('personas').doc(personaId).get();
+      const remoteDoc = getFirstDocData(verifyRes);
+      const remoteT3 = parseT3Content(remoteDoc?.content);
+      setT3Data(remoteT3);
+      refreshLocalPersona({
+        _id: persona._id || personaId,
+        id: persona.id || personaId,
+        content: remoteDoc?.content || persona.content,
+        updatedAt: remoteDoc?.updatedAt || Date.now(),
+      });
+
+      const stats = res.result || {};
+      showMsg(`✅ DSM 维护完成：扫描 ${stats.scanned || 0}，晋升 ${stats.promoted || 0}，归档 ${stats.archived || 0}，冲突 ${stats.conflicts || 0}`);
+    } catch (error) {
+      showMsg('❌ DSM 维护失败: ' + error.message);
+    } finally {
+      setIsMaintaining(false);
+    }
+  };
+
   const clearAllMemory = async () => {
     if (!window.confirm('确定清空全部记忆吗？这会清空 T3 状态档案、兴趣/禁忌/当前状态，以及长期记忆库；不会删除聊天记录。')) return;
 
@@ -184,7 +226,7 @@ export default function MemoryCabinV2({ activePersona, setActivePersona, showMsg
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex justify-end z-[120]">
       <div className="w-full max-w-md bg-white h-full shadow-2xl flex flex-col animate-in slide-in-from-right duration-300">
         <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50 relative overflow-hidden">
-          {isSaving && <div className="absolute top-0 left-0 w-full h-1 bg-purple-500 animate-pulse" />}
+          {(isSaving || isMaintaining) && <div className="absolute top-0 left-0 w-full h-1 bg-purple-500 animate-pulse" />}
           <h2 className="text-lg font-black text-slate-800 flex items-center gap-2">
             <BrainCircuit className="text-purple-600" /> T3 状态舱
           </h2>
@@ -206,21 +248,24 @@ export default function MemoryCabinV2({ activePersona, setActivePersona, showMsg
                   placeholder="给 TA 起一个名字"
                   className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold text-slate-700 focus:outline-none focus:border-purple-300"
                 />
-                <button type="submit" disabled={isSaving || !personaName.trim()} className="bg-purple-600 text-white px-3 rounded-xl hover:bg-purple-700 disabled:opacity-50 flex items-center gap-1 text-xs font-black">
+                <button type="submit" disabled={isSaving || isMaintaining || !personaName.trim()} className="bg-purple-600 text-white px-3 rounded-xl hover:bg-purple-700 disabled:opacity-50 flex items-center gap-1 text-xs font-black">
                   {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} 保存
                 </button>
               </div>
             </form>
 
             <div className="grid grid-cols-2 gap-2">
-              <button onClick={onClearChatHistory} disabled={isSaving} className="bg-slate-100 text-slate-600 px-3 py-2.5 rounded-xl text-xs font-black hover:bg-slate-200 disabled:opacity-50 flex justify-center items-center gap-1">
+              <button onClick={onClearChatHistory} disabled={isSaving || isMaintaining} className="bg-slate-100 text-slate-600 px-3 py-2.5 rounded-xl text-xs font-black hover:bg-slate-200 disabled:opacity-50 flex justify-center items-center gap-1">
                 <MessageSquareX size={15} /> 清空聊天
               </button>
-              <button onClick={clearAllMemory} disabled={isSaving} className="bg-red-50 text-red-600 px-3 py-2.5 rounded-xl text-xs font-black hover:bg-red-100 disabled:opacity-50 flex justify-center items-center gap-1">
+              <button onClick={clearAllMemory} disabled={isSaving || isMaintaining} className="bg-red-50 text-red-600 px-3 py-2.5 rounded-xl text-xs font-black hover:bg-red-100 disabled:opacity-50 flex justify-center items-center gap-1">
                 <DatabaseZap size={15} /> 清空记忆
               </button>
             </div>
-            <p className="text-[10px] text-slate-400 leading-relaxed">保存昵称会写入 personas.name 和 personas.content.persona_name，并立即从 TCB 回读校验。</p>
+            <button onClick={runMemoryMaintenance} disabled={isSaving || isMaintaining} className="w-full bg-indigo-50 text-indigo-600 px-3 py-2.5 rounded-xl text-xs font-black hover:bg-indigo-100 disabled:opacity-50 flex justify-center items-center gap-1">
+              {isMaintaining ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />} 运行 DSM 记忆维护
+            </button>
+            <p className="text-[10px] text-slate-400 leading-relaxed">维护会把稳定 T1 整合进 T3，并优先标记 archived/promoted_to_t3，不会物理删除旧记忆。</p>
           </div>
 
           <div className="bg-gradient-to-br from-rose-50 to-orange-50 p-5 rounded-2xl border border-rose-100 shadow-sm space-y-3">
