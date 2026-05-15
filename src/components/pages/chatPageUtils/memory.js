@@ -12,8 +12,8 @@ export const IMMEDIATE_MEMORY_WINDOW = 8;
 export const MEMORY_BATCH_MIN_ITEMS = 3;
 export const MEMORY_BATCH_MAX_WAIT_MS = 3 * 60 * 1000;
 
-const MEMORY_PREFETCH_REGEX = /(还记得|记不记得|之前|上次|以前|我说过|你记得|记得我|你知道我|我的计划|我的名字|我叫什么|我是谁|我是什么人|我是干嘛|我是做什么|我的身份|医院|学校|大学|公司|offer|录取|考试|项目|家教|实习|面试|旅行|旅游|分手|失恋|离职|搬家)/i;
-const T3_PRIORITY_QUERY_REGEX = /(我叫什么|我的名字|我是谁|我是什么人|我是干嘛|我是干啥|我是做什么|我是做啥|我的身份|你记得我吗|你知道我吗|记得我是谁|记得我的身份吗|记得我是干嘛的吗)/i;
+const MEMORY_PREFETCH_REGEX = /(还记得|记不记得|之前|上次|以前|我说过|你记得|记得我|你知道我|我的计划|我的名字|我叫什么|我是谁|我是什么人|我是干嘛|我是干啥|我是干什么|我是做什么|我是做啥|我的身份|医院|学校|大学|公司|offer|录取|考试|项目|家教|实习|面试|旅行|旅游|分手|失恋|离职|搬家)/i;
+const T3_PRIORITY_QUERY_REGEX = /(我叫什么|我的名字|我是谁|我是什么人|我是干嘛|我是干啥|我是干什么|我是做什么|我是做啥|我的身份|你记得我吗|你知道我吗|记得我是谁|记得我的身份吗|记得我是干嘛的吗|记得我是干什么的吗)/i;
 const IDENTITY_MEMORY_REGEX = /(用户.*是|用户身份|医学生|医学学生|学生|开发者|工程师|医生|护士|老师|家教|站长|网站.*开发|项目.*开发|正在开发|从事|职业|专业)/i;
 const BASE_HIGH_VALUE_MEMORY_REGEX = /(我叫|叫我|我的名字是|我名字叫|本人叫|录取|offer|Offer|离职|失业|分手|失恋|生病|手术|怀孕|搬家|转专业|确诊|复查|面试|签约)/i;
 const GENERIC_MEMORY_STOPWORDS = new Set([
@@ -377,7 +377,7 @@ export function buildMemoryExtractionPrompt(historyForExtraction) {
 重要性打分规则：日常小事0-3，明确计划4-7，重大节点或重要状态变化8-10。
 严格按下方JSON输出，不要包含markdown格式：
 { "importance": 9, "summary": "用户今天拿到了重要结果", "emotion": "excited", "confidence": "high" }
-其中 emotion 从 [happy, sad, neutral, excited, frustrated, anxious] 中选，confidence 从 [high, medium, low] 中选。如果没有硬核信息，importance 填 0。
+其中 emotion 从 [happy, sad, neutral, excited, anxious, frustrated] 中选，confidence 从 [high, medium, low] 中选。如果没有硬核信息，importance 填 0。
 对话片段：\n${historyForExtraction}`;
 }
 
