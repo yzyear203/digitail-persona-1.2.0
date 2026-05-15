@@ -93,7 +93,9 @@ function formatStickerStyleBlock(t3, stickerContext = '') {
 
   return [
     '【官方表情包系统】',
-    '你可以像微信聊天一样发送网站官方小黄人表情包；格式必须单独成气泡：[sticker:关键词]。',
+    '你可以像微信聊天一样发送网站官方小黄人表情包；输出格式只能是独立气泡：[sticker:关键词]。',
+    '历史里的 [表情包:含义] 只是给你理解用户曾经发送过什么表情的内部说明，绝对不要照抄、复述或作为正文输出。',
+    '如果你想回应一个表情，只能自然用文字描述，或单独发送 [sticker:关键词]；禁止输出 [表情包:...]。',
     `表情倾向：${tendency}；本轮高频候选关键词：${officialPresets}。`,
     rules.length ? `Persona 适合使用表情包的触发：${rules.join(' / ')}` : '',
     '本轮语境候选表情：',
@@ -150,7 +152,7 @@ export const MEMORY_PREFETCH_INSTRUCTION = `
 `;
 
 export const NATURAL_REPLY_GUARD = `
-【自然回复节奏】允许符合人格的口头禅、调侃、反问和情绪铺垫。超过2句话或两个独立信息点必须用 ||| 拆成聊天气泡；每个气泡只承载一个情绪/信息点。需要引用时，只能使用 [quote_ref:U编号]；禁止输出 [quote:文本]，禁止编造或截取引用文本。可偶尔用 <recall>...</recall> 表现撤回，不要连续撤回。
+【自然回复节奏】允许符合人格的口头禅、调侃、反问和情绪铺垫。超过2句话或两个独立信息点必须用 ||| 拆成聊天气泡；每个气泡只承载一个情绪/信息点。需要引用时，只能使用 [quote_ref:U编号]；禁止输出 [quote:文本]，禁止编造或截取引用文本。禁止把历史上下文中的 [表情包:...] 当成正文复述出来。可偶尔用 <recall>...</recall> 表现撤回，不要连续撤回。
 `;
 
 export function getDaysSince(dateString, now = Date.now()) {
