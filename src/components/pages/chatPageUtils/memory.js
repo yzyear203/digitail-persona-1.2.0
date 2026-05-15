@@ -1,4 +1,5 @@
 import { db } from '../../../lib/cloudbase';
+import { callDeepSeekAPI } from '../../../lib/api';
 import { upsertPersonaProfile } from '../../../lib/profileStore';
 import {
   hasContentSignal,
@@ -21,6 +22,18 @@ const GENERIC_MEMORY_STOPWORDS = new Set([
   '自己', '事情', '状态', '时候', '一个', '这个', '那个', '如果', '人格', '优先', '记住', '信息',
   '高价值', '事件', '偏好', '目标', '表达', '发生', '正在', '已经', '可能', '明显', '关系', '情绪',
 ]);
+
+const MEMORY_ROUTER_SYSTEM_PROMPT = `你是数字人格系统的记忆路由器，只判断当前对话是否需要检索长期记忆。
+必须只输出合法 JSON，不要 markdown，不要解释。
+字段：
+{
+  "needs_memory": true/false,
+  "query": "用于检索记忆的短查询，最多80字",
+  "reason": "极短原因"
+}
+需要检索长期记忆的情况：用户询问姓名、身份、关系、偏好、以前说过的事、上次/之前/还记得、计划进展、重要事件、当前长期状态。
+不需要检索的情况：寒暄、即时闲聊、纯知识题、让你写作/翻译/解释、当前消息已足够回答。
+不要因为一句话里出现普通名词就检索，必须判断回复是否依赖过往信息。`;
 
 function isMemoryEligibleMessage(message) {
   return message?.role !== 'system'
@@ -180,6 +193,61 @@ function scoreMemoryForQuery(memory, query, identityQuery = false) {
   return score;
 }
 
+function normalizeMemoryRouterJSON(rawText) {
+  const text = String(rawText || '').replace(/```json|```/g, '').trim();
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  try {
+    const parsed = JSON.parse(text.slice(start, end + 1));
+    return {
+      needsMemory: Boolean(parsed.needs_memory || parsed.needsMemory),
+      query: String(parsed.query || '').replace(/\s+/g, ' ').trim().slice(0, 100),
+      reason: String(parsed.reason || '').trim().slice(0, 80),
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+async function routeMemoryPrefetchIntent(messagesSnapshot) {
+  const eligibleMessages = (messagesSnapshot || []).filter(isMemoryEligibleMessage);
+  const latestUserText = getLatestUserText(eligibleMessages);
+  if (!latestUserText) return { needsMemory: false, query: '', source: 'empty' };
+
+  if (shouldPrefetchLongTermMemory(eligibleMessages)) {
+    return { needsMemory: true, query: buildMemoryQuery(eligibleMessages) || latestUserText, source: 'rule' };
+  }
+
+  const recentDialogue = eligibleMessages
+    .slice(-6)
+    .map(message => `${message.role === 'user' ? 'User' : 'Assistant'}: ${formatMessageForModel(message)}`)
+    .filter(Boolean)
+    .join('\n')
+    .slice(-900);
+
+  try {
+    const raw = await callDeepSeekAPI(
+      `最近对话：\n${recentDialogue}\n\n当前用户消息：${latestUserText}\n\n请判断回复这条消息是否需要检索长期记忆。`,
+      MEMORY_ROUTER_SYSTEM_PROMPT,
+      'flash',
+      null,
+      'memory_router'
+    );
+    const routed = normalizeMemoryRouterJSON(raw);
+    if (!routed?.needsMemory) return { needsMemory: false, query: '', source: 'llm', reason: routed?.reason || '' };
+    return {
+      needsMemory: true,
+      query: routed.query || buildMemoryQuery(eligibleMessages) || latestUserText,
+      source: 'llm',
+      reason: routed.reason || '',
+    };
+  } catch (error) {
+    console.warn('[DSM 记忆路由] DeepSeek 判断失败，降级为不检索:', error.message);
+    return { needsMemory: false, query: '', source: 'router_error' };
+  }
+}
+
 function normalizeMemoryTriggerText(value) {
   return String(value || '')
     .replace(/[\s，。,.!?！？；;：:“”"'、/\\|()[\]{}<>《》【】]+/g, ' ')
@@ -319,13 +387,16 @@ export function buildMemoryQuery(messagesSnapshot) {
 
 export async function prefetchLongTermMemory({ personaId, messagesSnapshot }) {
   const t3PriorityHint = buildT3PriorityHint(messagesSnapshot);
-  if (!db || !personaId || !shouldPrefetchLongTermMemory(messagesSnapshot)) return t3PriorityHint;
+  if (!db || !personaId) return t3PriorityHint;
 
-  const query = buildMemoryQuery(messagesSnapshot);
+  const route = await routeMemoryPrefetchIntent(messagesSnapshot);
+  if (!route.needsMemory) return t3PriorityHint;
+
+  const query = route.query || buildMemoryQuery(messagesSnapshot);
   if (!query) return t3PriorityHint;
 
   try {
-    const identityQuery = isT3PriorityQuery(messagesSnapshot);
+    const identityQuery = isT3PriorityQuery(messagesSnapshot) || IDENTITY_MEMORY_REGEX.test(query);
     const rawMemories = await fetchCandidateMemories(personaId, identityQuery);
     const scored = rawMemories
       .map(normalizeMemoryRecord)
@@ -334,13 +405,14 @@ export async function prefetchLongTermMemory({ personaId, messagesSnapshot }) {
       .sort((a, b) => b.keywordScore - a.keywordScore);
 
     const matched = scored.filter(memory => memory.keywordScore > 0).slice(0, identityQuery ? 6 : 4);
-    const fallback = MEMORY_PREFETCH_REGEX.test(query) || identityQuery ? scored.slice(0, identityQuery ? 4 : 2) : [];
+    const fallback = route.needsMemory ? scored.slice(0, identityQuery ? 4 : 2) : [];
     const finalMemories = matched.length ? matched : fallback;
 
     if (!finalMemories.length) return t3PriorityHint;
 
     const memoryTitle = identityQuery ? '【身份相关长期记忆】' : '【可能相关的长期记忆】';
-    return `${t3PriorityHint ? `${t3PriorityHint}\n` : ''}${memoryTitle}\n${finalMemories.map(memory => `- ${memory.content}`).join('\n')}\n请只在自然相关时使用这些记忆，不要生硬复述；若与T3档案冲突，以T3为准。`;
+    const routerNote = route.source === 'llm' ? `【记忆路由】DeepSeek 判断本轮需要检索长期记忆；检索查询：${query}` : '';
+    return `${t3PriorityHint ? `${t3PriorityHint}\n` : ''}${routerNote ? `${routerNote}\n` : ''}${memoryTitle}\n${finalMemories.map(memory => `- ${memory.content}`).join('\n')}\n请只在自然相关时使用这些记忆，不要生硬复述；若与T3档案冲突，以T3为准。`;
   } catch (error) {
     console.warn('长期记忆预取失败，跳过一跳式回源:', error);
     return t3PriorityHint;
