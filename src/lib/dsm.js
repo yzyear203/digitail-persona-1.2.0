@@ -152,7 +152,7 @@ export const MEMORY_PREFETCH_INSTRUCTION = `
 `;
 
 export const NATURAL_REPLY_GUARD = `
-【自然回复节奏】允许符合人格的口头禅、调侃、反问和情绪铺垫。超过2句话或两个独立信息点必须用 ||| 拆成聊天气泡；每个气泡只承载一个情绪/信息点。需要引用时，只能使用 [quote_ref:U编号]；禁止输出 [quote:文本]，禁止编造或截取引用文本。禁止把历史上下文中的 [表情包:...] 当成正文复述出来。可偶尔用 <recall>...</recall> 表现撤回，不要连续撤回。
+【自然回复节奏】允许符合人格的口头禅、调侃、反问和情绪铺垫。超过2句话或两个独立信息点必须用 ||| 拆成聊天气泡；每个气泡只承载一个情绪/信息点。||| 只是系统分气泡控制符，绝对不能把它当普通文字展示给用户。需要引用时，只能使用 [quote_ref:U编号]；禁止输出 [quote:文本]，禁止编造或截取引用文本。禁止把历史上下文中的 [表情包:...] 当成正文复述出来。可偶尔用 <recall>...</recall> 表现撤回，不要连续撤回。
 `;
 
 export function getDaysSince(dateString, now = Date.now()) {
@@ -279,8 +279,19 @@ export function applyBudgetAllocator(messages, sysPromptTokens, maxBudget = 4000
   return result;
 }
 
+function normalizeBubbleDelimiter(text) {
+  return String(text || '')
+    .replace(/[｜︱│┃丨]{3,}/g, '|||')
+    .replace(/(?:\s*\|\s*){3,}/g, '|||');
+}
+
 function normalizeReplyText(text) {
-  return String(text || '').replace(/\r\n/g, '\n').replace(/\\n/g, '\n').trim();
+  return normalizeBubbleDelimiter(String(text || ''))
+    .replace(/<br\s*\/?\s*>/gi, '\n')
+    .replace(/\r\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/^[ \t]*\|{3,}[ \t]*$/gm, '|||')
+    .trim();
 }
 
 function isStructuredOrCodeReply(text) {
@@ -339,8 +350,8 @@ function mergeControlOnlyParts(parts) {
 export function splitAssistantReply(responseText) {
   const cleanedText = normalizeReplyText(responseText);
   if (!cleanedText) return [];
-  if (cleanedText.includes('|||')) {
-    return mergeControlOnlyParts(cleanedText.split(/\|\|\|/).map(part => part.trim()).filter(Boolean))
+  if (/\|{3,}/.test(cleanedText)) {
+    return mergeControlOnlyParts(cleanedText.split(/[ \t]*\|{3,}[ \t]*/).map(part => part.trim()).filter(Boolean))
       .flatMap(part => splitLooseChatParagraphs(part));
   }
   if (isStructuredOrCodeReply(cleanedText)) return [cleanedText];
