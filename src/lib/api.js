@@ -1,5 +1,5 @@
 import { cloudbase } from './cloudbase';
-import { extractAndPersistRuntimeStatusMarkers } from './personaRuntimeStatus';
+import { extractAndPersistRuntimeStatusMarkers, shouldRefreshRuntimeStatus } from './personaRuntimeStatus';
 
 function getTextContent(content) {
   if (typeof content === 'string') return content;
@@ -109,6 +109,10 @@ function buildLatestUserReplyGuard(promptText) {
   return `【本轮回复焦点】\n最后一条用户消息是：“${latestUserText}”。必须优先回应这句话。不要把旧主动消息、状态栏、长期记忆或自己的活动当成本轮正文主线。引用用户原话时，只能引用用户真实发过的话，禁止编造“系统记录”式引用。撤回只能使用 <recall>内容</recall>。`;
 }
 
+function buildRuntimeStatusInstruction(personaId) {
+  return `【状态刷新】\n仅在本轮回复最开头输出一次隐藏状态标记，然后立刻正常回复用户。\n格式：[status:{"personaId":"${personaId}","label":"短状态","activity":"正在做的具体生活小事","color":"red|orange|yellow|green|blue|purple|pink|slate","base_mood":"基础情绪","chat_mood":"受本轮影响后的情绪","emotional_shift":"变化原因","duration_minutes":30}]\n状态只给 UI 使用，不要在正文解释；activity 是你自己的生活轨迹，除非用户问你在干嘛，否则正文不要围绕 activity 展开。\nlabel 最多 4 个中文字；duration_minutes 建议 20-90。`;
+}
+
 function buildApiMessagesFromPrompt(promptText, finalSystemInstructionText) {
   const parsedChat = parseChatPrompt(promptText);
   if (!parsedChat || parsedChat.messages.length === 0) {
@@ -185,9 +189,13 @@ export const callDeepSeekAPI = async (promptText, systemInstructionText = null, 
 
   const latestUserText = getLatestUserTextFromPrompt(promptText);
   const sanitizedSystemInstructionText = sanitizeSystemInstructionForChat(systemInstructionText, promptText);
+  const statusInstruction = isChatPrompt(promptText) && shouldRefreshRuntimeStatus(personaId)
+    ? buildRuntimeStatusInstruction(personaId)
+    : '';
   const finalSystemInstructionText = [
     sanitizedSystemInstructionText,
     buildLatestUserReplyGuard(promptText),
+    statusInstruction,
   ].filter(Boolean).join('\n\n');
 
   const apiMessages = buildApiMessagesFromPrompt(promptText, finalSystemInstructionText);
