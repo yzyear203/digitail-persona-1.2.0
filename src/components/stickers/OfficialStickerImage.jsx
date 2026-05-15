@@ -1,9 +1,25 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
+
+function getSheetUrlCandidates(sheetUrl) {
+  if (Array.isArray(sheetUrl)) return sheetUrl.filter(Boolean);
+  return sheetUrl ? [sheetUrl] : [];
+}
 
 export default function OfficialStickerImage({ sticker, className = '', fallbackClassName = '', alt }) {
+  const [candidateIndex, setCandidateIndex] = useState(0);
   const [spriteFailed, setSpriteFailed] = useState(false);
   const label = alt || sticker?.name || sticker?.emotion || '官方表情包';
-  const hasSprite = Boolean(sticker?.isSprite && sticker?.sheetUrl && !spriteFailed);
+  const sheetUrlCandidates = useMemo(() => getSheetUrlCandidates(sticker?.sheetUrl), [sticker?.sheetUrl]);
+  const currentSheetUrl = sheetUrlCandidates[candidateIndex] || '';
+  const hasSprite = Boolean(sticker?.isSprite && currentSheetUrl && !spriteFailed);
+
+  const handleSpriteError = () => {
+    if (candidateIndex < sheetUrlCandidates.length - 1) {
+      setCandidateIndex(index => index + 1);
+      return;
+    }
+    setSpriteFailed(true);
+  };
 
   if (!hasSprite) {
     return (
@@ -33,16 +49,16 @@ export default function OfficialStickerImage({ sticker, className = '', fallback
       title={label}
       className={`bg-no-repeat bg-cover ${className}`}
       style={{
-        backgroundImage: `url(${sticker.sheetUrl})`,
+        backgroundImage: `url(${currentSheetUrl})`,
         backgroundSize,
         backgroundPosition,
       }}
     >
       <img
-        src={sticker.sheetUrl}
+        src={currentSheetUrl}
         alt=""
         className="hidden"
-        onError={() => setSpriteFailed(true)}
+        onError={handleSpriteError}
       />
     </div>
   );
